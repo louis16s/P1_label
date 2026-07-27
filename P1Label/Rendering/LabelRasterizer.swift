@@ -4,17 +4,24 @@ import CoreImage.CIFilterBuiltins
 import Foundation
 
 enum LabelRasterizer {
-    private static let dotsPerMillimeter = 8.0
-
     static func raster(
         document: LabelDocument,
         horizontalOffsetMM: Double,
         verticalOffsetMM: Double
     ) throws -> P1Raster {
-        let width = P1Protocol.printWidthBytes * 8
-        let height = max(1, Int((document.paper.heightMM * dotsPerMillimeter).rounded()))
-        let printerWidthMM = Double(width) / dotsPerMillimeter
-        let paperRightAlignmentMM = max(0, printerWidthMM - document.paper.widthMM)
+        try validate(document: document)
+        guard horizontalOffsetMM.isFinite,
+              verticalOffsetMM.isFinite,
+              abs(horizontalOffsetMM) <= 10,
+              abs(verticalOffsetMM) <= 10 else {
+            throw RenderError.invalidOffset
+        }
+        let width = P1PrintGeometry.maximumWidthDots
+        let height = P1PrintGeometry.dots(forMillimeters: document.paper.heightMM)
+        let paperWidth = P1PrintGeometry.dots(forMillimeters: document.paper.widthMM)
+        let paperRightAlignment = max(0, width - paperWidth)
+        let horizontalOffset = P1PrintGeometry.dots(forMillimeters: horizontalOffsetMM)
+        let verticalOffset = P1PrintGeometry.dots(forMillimeters: verticalOffsetMM)
         guard let context = CGContext(
             data: nil,
             width: width,
@@ -37,12 +44,12 @@ enum LabelRasterizer {
         NSGraphicsContext.current = graphicsContext
         defer { NSGraphicsContext.restoreGraphicsState() }
 
-        for layer in document.layers {
+        for layer in document.layers where !layer.isHidden {
             draw(
                 layer,
                 in: context,
-                offsetX: (paperRightAlignmentMM + horizontalOffsetMM) * dotsPerMillimeter,
-                offsetY: verticalOffsetMM * dotsPerMillimeter
+                offsetX: Double(paperRightAlignment + horizontalOffset),
+                offsetY: Double(verticalOffset)
             )
         }
 
@@ -66,7 +73,7 @@ enum LabelRasterizer {
     }
 
     private static func draw(_ layer: LabelLayer, in context: CGContext, offsetX: Double, offsetY: Double) {
-        let scale = dotsPerMillimeter
+        let scale = P1PrintGeometry.dotsPerMillimeter
         let rect = CGRect(
             x: (layer.x * scale) + offsetX,
             y: (layer.y * scale) + offsetY,
@@ -191,12 +198,59 @@ enum LabelRasterizer {
     enum RenderError: LocalizedError {
         case cannotCreateCanvas
         case cannotReadPixels
+        case invalidPaperWidth
+        case invalidPaperHeight
+        case invalidLayerGeometry
+        case invalidOffset
 
         var errorDescription: String? {
             switch self {
             case .cannotCreateCanvas: "无法创建标签画布。"
             case .cannotReadPixels: "无法读取标签点阵。"
+            case .invalidPaperWidth: "标签宽度必须大于 0 且不能超过 P1 打印头的 48 mm。"
+            case .invalidPaperHeight: "标签高度超出 P1 单页协议支持范围。"
+            case .invalidLayerGeometry: "标签包含无效的元素尺寸或坐标，请检查元素位置和大小。"
+            case .invalidOffset: "打印偏移必须位于 -10 mm 到 10 mm 之间。"
             }
+        }
+    }
+
+    private static func validate(document: LabelDocument) throws {
+        let paper = document.paper
+        guard paper.widthMM.isFinite,
+              paper.widthMM > 0,
+              (1...P1PrintGeometry.maximumWidthDots).contains(
+                P1PrintGeometry.dots(forMillimeters: paper.widthMM)
+              ) else {
+            throw RenderError.invalidPaperWidth
+        }
+        let height = P1PrintGeometry.dots(forMillimeters: paper.heightMM)
+        guard paper.heightMM.isFinite,
+              paper.heightMM > 0,
+              height > 0,
+              height <= P1PrintGeometry.maximumPageHeightDots else {
+            throw RenderError.invalidPaperHeight
+        }
+        let maximumDimensionMM = Double(P1PrintGeometry.maximumPageHeightDots)
+            / P1PrintGeometry.dotsPerMillimeter
+        guard document.layers.allSatisfy({
+            $0.x.isFinite
+                && $0.y.isFinite
+                && $0.width.isFinite
+                && $0.height.isFinite
+                && $0.rotation.isFinite
+                && $0.fontSizeMM.isFinite
+                && $0.width > 0
+                && $0.height > 0
+                && $0.fontSizeMM > 0
+                && abs($0.x) <= maximumDimensionMM
+                && abs($0.y) <= maximumDimensionMM
+                && $0.width <= maximumDimensionMM
+                && $0.height <= maximumDimensionMM
+                && $0.fontSizeMM <= 100
+                && abs($0.rotation) <= 360_000
+        }) else {
+            throw RenderError.invalidLayerGeometry
         }
     }
 }

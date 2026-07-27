@@ -27,9 +27,23 @@ struct PaperSize: Codable, Hashable {
     var widthMM: Double
     var heightMM: Double
 
-    var pixelWidth: Int { max(1, Int((widthMM * 8).rounded())) }
-    var pixelHeight: Int { max(1, Int((heightMM * 8).rounded())) }
-    var displayName: String { "\(Int(widthMM)) × \(Int(heightMM)) mm" }
+    var pixelWidth: Int {
+        min(
+            P1PrintGeometry.maximumWidthDots,
+            max(1, P1PrintGeometry.dots(forMillimeters: widthMM))
+        )
+    }
+    var pixelHeight: Int {
+        min(
+            P1PrintGeometry.maximumPageHeightDots,
+            max(1, P1PrintGeometry.dots(forMillimeters: heightMM))
+        )
+    }
+    var displayName: String {
+        let width = widthMM.isFinite ? widthMM.formatted(.number.precision(.fractionLength(0...1))) : "?"
+        let height = heightMM.isFinite ? heightMM.formatted(.number.precision(.fractionLength(0...1))) : "?"
+        return "\(width) × \(height) mm"
+    }
 }
 
 enum LabelTextAlignment: String, Codable, CaseIterable {

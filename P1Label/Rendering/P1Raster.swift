@@ -33,9 +33,9 @@ struct P1Raster: Equatable {
         var result = P1Raster(width: width, height: height)
         for y in 0..<height {
             for x in 0..<width where self[x, y] {
-                let targetX = x + offsetX
-                let targetY = y + offsetY
-                if result.dots.indices.contains(targetY * width + targetX),
+                let (targetX, xOverflow) = x.addingReportingOverflow(offsetX)
+                let (targetY, yOverflow) = y.addingReportingOverflow(offsetY)
+                if !xOverflow, !yOverflow,
                    targetX >= 0, targetX < width, targetY >= 0, targetY < height {
                     result[targetX, targetY] = true
                 }

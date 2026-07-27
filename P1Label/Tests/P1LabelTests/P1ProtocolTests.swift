@@ -25,6 +25,19 @@ struct P1ProtocolTests {
         #expect(abs(result.rotationDegrees) < 0.001)
     }
 
+    @Test func photoCalibrationAddsCorrectionToOffsetUsedForTarget() {
+        let correction = PhotoCalibrationResult(
+            horizontalOffsetMM: -0.3,
+            verticalOffsetMM: 0.4,
+            rotationDegrees: 0.2,
+            confidence: 0.9
+        )
+        let absolute = correction.addingPrintedOffset(horizontal: 0.2, vertical: -0.1)
+        #expect(absolute.horizontalOffsetMM == -0.1)
+        #expect(absolute.verticalOffsetMM == 0.3)
+        #expect(absolute.rotationDegrees == 0.2)
+    }
+
     @Test func photoCalibrationRecognizesRoundedPaperOnDarkBackground() throws {
         let width = 800
         let height = 600
@@ -86,6 +99,13 @@ struct P1ProtocolTests {
         #expect(records[0]["姓名"] == "小王")
         #expect(records[0]["备注"] == "A, B")
         #expect(records[1]["序号"] == "2")
+    }
+
+    @Test func csvParserRejectsUnclosedQuotedField() {
+        let csv = Data("姓名,备注\n小王,\"未闭合\n".utf8)
+        #expect(throws: CSVBatchParser.CSVError.self) {
+            try CSVBatchParser.records(from: csv)
+        }
     }
 
     @Test func usbPrinterPortStatusDecodesStandardBits() {
@@ -259,6 +279,113 @@ struct P1ProtocolTests {
         let shifted = raster.offsetBy(x: 1, y: 0)
         #expect(shifted[1, 0])
         #expect(!shifted[7, 1])
+    }
+
+    @Test func signedPrintOffsetsMoveInOppositeDirections() throws {
+        let document = LabelDocument(
+            name: "偏移方向",
+            paper: PaperSize(widthMM: 40, heightMM: 30),
+            layers: [.shape(.rectangle, x: 10, y: 10)]
+        )
+        let negativeX = try LabelRasterizer.raster(
+            document: document,
+            horizontalOffsetMM: -0.2,
+            verticalOffsetMM: 0
+        )
+        let centered = try LabelRasterizer.raster(
+            document: document,
+            horizontalOffsetMM: 0,
+            verticalOffsetMM: 0
+        )
+        let positiveX = try LabelRasterizer.raster(
+            document: document,
+            horizontalOffsetMM: 0.2,
+            verticalOffsetMM: 0
+        )
+        let negativeY = try LabelRasterizer.raster(
+            document: document,
+            horizontalOffsetMM: 0,
+            verticalOffsetMM: -0.2
+        )
+        let positiveY = try LabelRasterizer.raster(
+            document: document,
+            horizontalOffsetMM: 0,
+            verticalOffsetMM: 0.2
+        )
+
+        let negativeXBounds = try #require(inkBounds(negativeX))
+        let centeredBounds = try #require(inkBounds(centered))
+        let positiveXBounds = try #require(inkBounds(positiveX))
+        let negativeYBounds = try #require(inkBounds(negativeY))
+        let positiveYBounds = try #require(inkBounds(positiveY))
+        #expect(negativeXBounds.minX < centeredBounds.minX)
+        #expect(centeredBounds.minX < positiveXBounds.minX)
+        #expect(negativeYBounds.minY < centeredBounds.minY)
+        #expect(centeredBounds.minY < positiveYBounds.minY)
+        #expect(P1PrintGeometry.dots(forMillimeters: -0.2) == -2)
+        #expect(P1PrintGeometry.dots(forMillimeters: 0.2) == 2)
+    }
+
+    @MainActor
+    @Test func positioningCalibrationPrintAppliesCurrentSignedOffset() throws {
+        let negative = AppModel()
+        negative.calibrationOffsetX = -0.2
+        negative.prepareTestPrint()
+        let negativeData = try #require(negative.pendingPrint?.data)
+
+        let positive = AppModel()
+        positive.calibrationOffsetX = 0.2
+        positive.prepareTestPrint()
+        let positiveData = try #require(positive.pendingPrint?.data)
+
+        #expect(negativeData != positiveData)
+        #expect(negative.lastCalibrationPrintOffsetX == -0.2)
+        #expect(positive.lastCalibrationPrintOffsetX == 0.2)
+    }
+
+    @Test func hiddenObjectsDoNotPrint() throws {
+        var layer = LabelLayer.shape(.rectangle, x: 2, y: 2)
+        layer.isHidden = true
+        let raster = try LabelRasterizer.raster(
+            document: LabelDocument(
+                name: "隐藏元素",
+                paper: PaperSize(widthMM: 40, heightMM: 30),
+                layers: [layer]
+            ),
+            horizontalOffsetMM: 0,
+            verticalOffsetMM: 0
+        )
+        #expect(!raster.dots.contains(true))
+    }
+
+    @Test func rejectsUnsafePaperAndLayerGeometry() {
+        let oversized = LabelDocument(
+            name: "超宽",
+            paper: PaperSize(widthMM: 60, heightMM: 30),
+            layers: []
+        )
+        #expect(throws: LabelRasterizer.RenderError.self) {
+            try LabelRasterizer.raster(
+                document: oversized,
+                horizontalOffsetMM: 0,
+                verticalOffsetMM: 0
+            )
+        }
+
+        var invalidLayer = LabelLayer.shape(.rectangle, x: 0, y: 0)
+        invalidLayer.width = -.infinity
+        let invalid = LabelDocument(
+            name: "无效元素",
+            paper: PaperSize(widthMM: 40, heightMM: 30),
+            layers: [invalidLayer]
+        )
+        #expect(throws: LabelRasterizer.RenderError.self) {
+            try LabelRasterizer.raster(
+                document: invalid,
+                horizontalOffsetMM: 0,
+                verticalOffsetMM: 0
+            )
+        }
     }
 
     @Test func rendersNativeDocumentAtP1Resolution() throws {
@@ -702,4 +829,21 @@ struct P1ProtocolTests {
         // so antialiasing may touch the immediately preceding column.
         #expect((63...64).contains(firstPrintedColumn ?? -1))
     }
+}
+
+private func inkBounds(_ raster: P1Raster) -> (minX: Int, minY: Int, maxX: Int, maxY: Int)? {
+    var minimumX = raster.width
+    var minimumY = raster.height
+    var maximumX = -1
+    var maximumY = -1
+    for y in 0..<raster.height {
+        for x in 0..<raster.width where raster[x, y] {
+            minimumX = min(minimumX, x)
+            minimumY = min(minimumY, y)
+            maximumX = max(maximumX, x)
+            maximumY = max(maximumY, y)
+        }
+    }
+    guard maximumX >= 0, maximumY >= 0 else { return nil }
+    return (minimumX, minimumY, maximumX, maximumY)
 }

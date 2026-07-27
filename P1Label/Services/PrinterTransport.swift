@@ -439,7 +439,7 @@ final class BluetoothDiscovery: NSObject, ObservableObject, CBCentralManagerDele
               let characteristic = writeCharacteristic,
               let data = pendingWriteData else { return }
         let maximum = max(
-            20,
+            1,
             min(
                 Self.maximumBLEChunkLength,
                 peripheral.maximumWriteValueLength(for: writeType)

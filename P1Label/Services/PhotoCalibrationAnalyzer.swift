@@ -16,6 +16,19 @@ struct PhotoCalibrationResult: Equatable, Sendable {
         default: "低"
         }
     }
+
+    func addingPrintedOffset(horizontal: Double, vertical: Double) -> PhotoCalibrationResult {
+        PhotoCalibrationResult(
+            horizontalOffsetMM: P1PrintGeometry.normalizedOffsetMM(
+                horizontal + horizontalOffsetMM
+            ),
+            verticalOffsetMM: P1PrintGeometry.normalizedOffsetMM(
+                vertical + verticalOffsetMM
+            ),
+            rotationDegrees: rotationDegrees,
+            confidence: confidence
+        )
+    }
 }
 
 enum PhotoCalibrationError: LocalizedError {

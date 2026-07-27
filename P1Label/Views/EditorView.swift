@@ -685,7 +685,7 @@ private struct EditorInspector: View {
                         Stepper("", value: $model.calibrationOffsetY, in: -10...10, step: 0.1)
                             .labelsHidden()
                     }
-                    Text("负值向左/向上，正值向右/向下；数值会自动记忆。")
+                    Text("负值向左/向上，正值向右/向下；打印时按 0.125 mm/点舍入。")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     Text("标签纸默认按 P1 打印头右侧对齐。")

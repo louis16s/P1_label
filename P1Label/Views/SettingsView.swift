@@ -52,7 +52,7 @@ private struct PrintOffsetSettingsSection: View {
                 Stepper("", value: $model.calibrationOffsetY, in: -10...10, step: 0.1)
                     .labelsHidden()
             }
-            Text("精确到 0.1 mm；负值向左/向上，正值向右/向下，设置会自动保存。")
+            Text("输入精确到 0.1 mm；打印时按 0.125 mm/点舍入。负值向左/向上，正值向右/向下。")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -83,7 +83,7 @@ private struct PhotoCalibrationSettingsSection: View {
                     Button("取消", role: .cancel) { model.cancelPendingPrint() }
                     Button("确认打印") { model.confirmPendingPrint() }
                 } message: {
-                    Text("将打印一张用于照片识别的定位标签；不会套用当前打印偏移。")
+                    Text("将打印一张用于照片识别的定位标签，并套用当前打印偏移。纸张会移动。")
                 }
             }
 
@@ -226,11 +226,23 @@ private struct PhotoCalibrationSettingsSection: View {
         calibrationError = nil
         selectedPhotoName = url.lastPathComponent
         let paper = model.document.paper
+        let baseOffsetX = model.lastCalibrationPrintOffsetX
+        let baseOffsetY = model.lastCalibrationPrintOffsetY
+        let accessed = url.startAccessingSecurityScopedResource()
         Task {
+            defer {
+                if accessed {
+                    url.stopAccessingSecurityScopedResource()
+                }
+            }
             do {
-                calibrationResult = try await Task.detached(priority: .userInitiated) {
+                let correction = try await Task.detached(priority: .userInitiated) {
                     try PhotoCalibrationAnalyzer.analyze(photoURL: url, paper: paper)
                 }.value
+                calibrationResult = correction.addingPrintedOffset(
+                    horizontal: baseOffsetX,
+                    vertical: baseOffsetY
+                )
             } catch {
                 calibrationError = error.localizedDescription
             }

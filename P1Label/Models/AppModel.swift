@@ -13,6 +13,8 @@ final class AppModel {
     var printStatus = "尚未连接打印机"
     var usbDevices: [P1USBDevice] = []
     var isVerifyingUSB = false
+    private(set) var lastCalibrationPrintOffsetX = 0.0
+    private(set) var lastCalibrationPrintOffsetY = 0.0
     var printerPortStatus: P1PrinterPortStatus?
     var deviceStatus: P1DeviceStatus?
     var batchRecords: [[String: String]] = []
@@ -65,6 +67,7 @@ final class AppModel {
     @ObservationIgnored private var lastHistoryDate = Date.distantPast
     @ObservationIgnored private var lastSavedDocument = LabelDocument.blank
     @ObservationIgnored private var autosaveTask: Task<Void, Never>?
+    @ObservationIgnored private var printerStatusTask: Task<Void, Never>?
     @ObservationIgnored private var isAutomaticallyDiscoveringPrinter = false
     private(set) var canUndo = false
     private(set) var canRedo = false
@@ -487,11 +490,20 @@ final class AppModel {
     }
 
     func prepareTestPrint() {
+        guard P1PrintGeometry.supports(document.paper) else {
+            pendingPrint = nil
+            printStatus = "无法生成定位标签：纸张尺寸必须大于 0，宽度不能超过 48 mm。"
+            return
+        }
+        let offsetX = P1PrintGeometry.dots(forMillimeters: calibrationOffsetX)
+        let offsetY = P1PrintGeometry.dots(forMillimeters: calibrationOffsetY)
         let raster = P1Raster.positioningCalibrationSheet(
             width: P1Protocol.printWidthBytes * 8,
             paperWidth: document.paper.pixelWidth,
             height: document.paper.pixelHeight
-        )
+        ).offsetBy(x: offsetX, y: offsetY)
+        lastCalibrationPrintOffsetX = calibrationOffsetX
+        lastCalibrationPrintOffsetY = calibrationOffsetY
         pendingPrint = .init(
             data: repeatedPrintData(for: raster, copies: 1),
             name: "P1 定位校准标签 \(document.paper.displayName)",
@@ -501,6 +513,11 @@ final class AppModel {
     }
 
     func preparePaperCalibration() {
+        guard P1PrintGeometry.supports(document.paper) else {
+            pendingPrint = nil
+            printStatus = "无法校准纸张：纸张尺寸必须大于 0，宽度不能超过 48 mm。"
+            return
+        }
         let height = max(1, Int((document.paper.heightMM * 8).rounded()))
         let blank = P1Raster(width: P1Protocol.printWidthBytes * 8, height: height)
         pendingPrint = .init(
@@ -525,6 +542,7 @@ final class AppModel {
             )
             printStatus = "标签已生成，等待确认。"
         } catch {
+            pendingPrint = nil
             printStatus = error.localizedDescription
         }
     }
@@ -584,6 +602,7 @@ final class AppModel {
             )
             printStatus = "已生成 \(records.count) 张批量标签，等待确认。"
         } catch {
+            pendingPrint = nil
             printStatus = error.localizedDescription
         }
     }
@@ -657,12 +676,16 @@ final class AppModel {
     }
 
     func refreshPrinterStatus() {
+        printerStatusTask?.cancel()
         if bluetoothDiscovery.isConnected {
-            Task {
+            printerStatusTask = Task {
                 do {
-                    deviceStatus = try await bluetoothDiscovery.requestPrinterStatus() ?? .unknown
+                    let status = try await bluetoothDiscovery.requestPrinterStatus() ?? .unknown
+                    guard !Task.isCancelled else { return }
+                    deviceStatus = status
                     printStatus = "P1 状态：\(deviceStatus?.title ?? "状态未知")"
                 } catch {
+                    guard !Task.isCancelled else { return }
                     deviceStatus = .unknown
                     printStatus = "读取蓝牙状态失败：\(error.localizedDescription)"
                 }
@@ -675,13 +698,15 @@ final class AppModel {
             printStatus = "未检测到德佟 P1。"
             return
         }
-        Task {
+        printerStatusTask = Task {
             do {
                 let status = try await usbTransport.readPortStatus()
+                guard !Task.isCancelled else { return }
                 printerPortStatus = status
                 deviceStatus = .usb(status)
                 printStatus = "P1 状态：\(status.displayName)"
             } catch {
+                guard !Task.isCancelled else { return }
                 printerPortStatus = nil
                 deviceStatus = nil
                 printStatus = error.localizedDescription
@@ -772,8 +797,7 @@ final class AppModel {
     }
 
     private static func normalizedCalibrationOffset(_ value: Double) -> Double {
-        let rounded = (min(10, max(-10, value)) * 10).rounded() / 10
-        return abs(rounded) < 0.000_1 ? 0 : rounded
+        P1PrintGeometry.normalizedOffsetMM(value)
     }
 }
 

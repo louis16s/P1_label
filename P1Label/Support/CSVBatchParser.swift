@@ -5,7 +5,7 @@ enum CSVBatchParser {
         guard let text = String(data: data, encoding: .utf8) else {
             throw CSVError.invalidEncoding
         }
-        let rows = parseRows(text)
+        let rows = try parseRows(text)
         guard let headers = rows.first, !headers.isEmpty else {
             throw CSVError.missingHeader
         }
@@ -22,7 +22,7 @@ enum CSVBatchParser {
         }
     }
 
-    private static func parseRows(_ text: String) -> [[String]] {
+    private static func parseRows(_ text: String) throws -> [[String]] {
         var rows: [[String]] = []
         var row: [String] = []
         var field = ""
@@ -52,6 +52,9 @@ enum CSVBatchParser {
             }
             index = text.index(after: index)
         }
+        guard !quoted else {
+            throw CSVError.malformedQuotes
+        }
         if !field.isEmpty || !row.isEmpty {
             row.append(field.trimmingCharacters(in: CharacterSet(charactersIn: "\r")))
             rows.append(row)
@@ -62,11 +65,13 @@ enum CSVBatchParser {
     enum CSVError: LocalizedError {
         case invalidEncoding
         case missingHeader
+        case malformedQuotes
 
         var errorDescription: String? {
             switch self {
             case .invalidEncoding: "CSV 必须使用 UTF-8 编码。"
             case .missingHeader: "CSV 第一行必须包含字段名。"
+            case .malformedQuotes: "CSV 包含未闭合的引号，请检查导出文件。"
             }
         }
     }
