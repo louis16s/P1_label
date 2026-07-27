@@ -299,6 +299,30 @@ struct P1ProtocolTests {
         #expect(inverted.packedRows() == [Data([0x7F])])
     }
 
+    @Test func positioningCalibrationSheetUsesPaperEdgesAndAsymmetricMarkers() {
+        let raster = P1Raster.positioningCalibrationSheet(
+            width: 384,
+            paperWidth: 320,
+            height: 240
+        )
+
+        // A 40 mm label is right-aligned on the 48 mm print head.
+        for y in 0..<raster.height {
+            for x in 0..<64 {
+                #expect(!raster[x, y])
+            }
+        }
+        #expect(raster[72, 8]) // one-millimeter inset border
+        #expect(raster[376 - 1, 8])
+        #expect(raster[224, 120]) // center cross
+
+        // Top-left and top-right IDs deliberately differ.
+        #expect(raster[84, 20])
+        #expect(!raster[88, 20])
+        #expect(raster[352, 20])
+        #expect(raster[356, 20])
+    }
+
     @MainActor
     @Test func automaticPrinterDiscoveryStopsAtItsDeadline() async {
         let model = AppModel()

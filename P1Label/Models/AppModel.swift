@@ -470,14 +470,17 @@ final class AppModel {
     }
 
     func prepareTestPrint() {
-        let raster = P1Raster.calibrationSheet(width: P1Protocol.printWidthBytes * 8, height: 160)
-            .offsetBy(x: Int((calibrationOffsetX * 8).rounded()), y: Int((calibrationOffsetY * 8).rounded()))
+        let raster = P1Raster.positioningCalibrationSheet(
+            width: P1Protocol.printWidthBytes * 8,
+            paperWidth: document.paper.pixelWidth,
+            height: document.paper.pixelHeight
+        )
         pendingPrint = .init(
             data: repeatedPrintData(for: raster, copies: 1),
-            name: "P1 打印校准页",
+            name: "P1 定位校准标签 \(document.paper.displayName)",
             source: .calibration
         )
-        printStatus = "校准页已生成，等待确认。"
+        printStatus = "定位校准标签已生成，等待确认。"
     }
 
     func preparePaperCalibration() {
