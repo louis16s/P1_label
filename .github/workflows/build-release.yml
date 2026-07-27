@@ -41,22 +41,16 @@ jobs:
 
       - name: 验证应用
         run: |
-          codesign --verify --deep --strict dist/P1Label.app
+          codesign --verify --deep --strict artifacts/latest/P1Label.app
           test "$(uname -m)" = "arm64"
-          file dist/P1Label.app/Contents/MacOS/P1Label | grep -q "arm64"
-          otool -L dist/P1Label.app/Contents/MacOS/P1Label | grep -q "@executable_path/../Frameworks/libusb-1.0.0.dylib"
-
-      - name: 制作压缩包
-        run: |
-          ditto -c -k --sequesterRsrc --keepParent \
-            dist/P1Label.app \
-            P1Label-macOS26-arm64.zip
+          file artifacts/latest/P1Label.app/Contents/MacOS/P1Label | grep -q "arm64"
+          otool -L artifacts/latest/P1Label.app/Contents/MacOS/P1Label | grep -q "@executable_path/../Frameworks/libusb-1.0.0.dylib"
 
       - name: 上传自动构建
         uses: actions/upload-artifact@v4
         with:
           name: P1Label-macOS26-arm64
-          path: P1Label-macOS26-arm64.zip
+          path: artifacts/latest/P1Label-macOS26-arm64.zip
           if-no-files-found: error
           retention-days: 14
 
@@ -66,7 +60,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "${GITHUB_REF_NAME}" \
-            P1Label-macOS26-arm64.zip \
+            artifacts/latest/P1Label-macOS26-arm64.zip \
             --verify-tag \
             --generate-notes \
             --title "P1 Label ${GITHUB_REF_NAME}"

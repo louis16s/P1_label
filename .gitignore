@@ -2,6 +2,9 @@
 .build/
 .swiftpm/
 .codex/
+artifacts/
+# Legacy local output directories. They are ignored only to avoid accidental
+# commits while existing workspaces migrate to artifacts/latest.
 dist/
 outputs/
 work/

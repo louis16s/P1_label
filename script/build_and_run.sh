@@ -13,8 +13,10 @@ MIN_SYSTEM_VERSION="26.0"
 APP_VERSION="${P1_LABEL_VERSION:-$(tr -d '[:space:]' < "$ROOT_DIR/VERSION")}"
 APP_VERSION="${APP_VERSION#v}"
 BUILD_NUMBER="${P1_LABEL_BUILD_NUMBER:-1}"
-DIST_DIR="$ROOT_DIR/dist"
-APP_BUNDLE="$DIST_DIR/$APP_NAME.app"
+ARTIFACTS_DIR="$ROOT_DIR/artifacts"
+LATEST_DIR="$ARTIFACTS_DIR/latest"
+APP_BUNDLE="$LATEST_DIR/$APP_NAME.app"
+ARCHIVE_PATH="$LATEST_DIR/$APP_NAME-macOS26-arm64.zip"
 APP_CONTENTS="$APP_BUNDLE/Contents"
 APP_MACOS="$APP_CONTENTS/MacOS"
 APP_RESOURCES="$APP_CONTENTS/Resources"
@@ -29,7 +31,8 @@ fi
 swift build -c "$BUILD_CONFIGURATION"
 BUILD_BINARY="$(swift build -c "$BUILD_CONFIGURATION" --show-bin-path)/$APP_NAME"
 
-rm -rf "$APP_BUNDLE"
+mkdir -p "$LATEST_DIR"
+rm -rf "$APP_BUNDLE" "$ARCHIVE_PATH"
 mkdir -p "$APP_MACOS" "$APP_RESOURCES" "$APP_FRAMEWORKS"
 cp "$BUILD_BINARY" "$APP_BINARY"
 cp "$ROOT_DIR/P1Label/Resources/AppIcon.icns" "$APP_RESOURCES/AppIcon.icns"
@@ -83,6 +86,10 @@ else
   /usr/bin/codesign --force --sign - --entitlements "$ROOT_DIR/P1Label.entitlements" "$APP_BUNDLE"
 fi
 
+# `artifacts/latest` is the only local delivery location. Keep the app and
+# archive together so a zip can never lag behind the app it contains.
+/usr/bin/ditto -c -k --sequesterRsrc --keepParent "$APP_BUNDLE" "$ARCHIVE_PATH"
+
 open_app() { /usr/bin/open -n "$APP_BUNDLE"; }
 
 case "$MODE" in
@@ -91,6 +98,6 @@ case "$MODE" in
   --logs|logs) open_app; /usr/bin/log stream --info --style compact --predicate "process == \"$APP_NAME\"" ;;
   --telemetry|telemetry) open_app; /usr/bin/log stream --info --style compact --predicate "subsystem == \"$BUNDLE_ID\"" ;;
   --verify|verify) open_app; sleep 1; pgrep -x "$APP_NAME" >/dev/null ;;
-  --package|package) echo "$APP_BUNDLE" ;;
+  --package|package) echo "$ARCHIVE_PATH" ;;
   *) echo "usage: $0 [run|--debug|--logs|--telemetry|--verify|--package]" >&2; exit 2 ;;
 esac

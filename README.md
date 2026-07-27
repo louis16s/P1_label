@@ -26,7 +26,7 @@ swift test
 ./script/build_and_run.sh
 ```
 
-构建脚本会在 `dist/P1Label.app` 生成应用。源代码采用 Swift Package 管理，界面使用 SwiftUI，USB 传输由精简的 C 桥接层连接 `libusb`。
+构建脚本会把最新可运行应用固定写入 `artifacts/latest/P1Label.app`，同时生成同目录的 `P1Label-macOS26-arm64.zip`。源代码采用 Swift Package 管理，界面使用 SwiftUI，USB 传输由精简的 C 桥接层连接 `libusb`。目录和交付约定见[本地构建与交付规范](docs/本地构建与交付规范.md)。
 
 每次推送都会由 GitHub Actions 在 macOS 26 ARM64 环境中运行测试、构建独立应用并上传压缩包。推送形如 `v1.0.0` 的版本标签时，会自动创建 GitHub Release。
 
