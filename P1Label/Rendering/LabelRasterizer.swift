@@ -82,16 +82,12 @@ enum LabelRasterizer {
         switch layer.kind {
         case .text:
             let size = max(6, layer.fontSizeMM * scale)
-            var font = NSFontManager.shared.convert(
-                NSFont.systemFont(ofSize: size),
-                toFamily: layer.fontName
+            let font = LabelTextMetrics.font(
+                family: layer.fontName,
+                pointSize: size,
+                isBold: layer.isBold,
+                isItalic: layer.isItalic
             )
-            if layer.isBold {
-                font = NSFontManager.shared.convert(font, toHaveTrait: .boldFontMask)
-            }
-            if layer.isItalic {
-                font = NSFontManager.shared.convert(font, toHaveTrait: .italicFontMask)
-            }
             let value = layer.text.isEmpty ? "文字" : layer.text
             let paragraph = NSMutableParagraphStyle()
             paragraph.alignment = switch layer.textAlignment {

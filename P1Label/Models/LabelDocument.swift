@@ -214,6 +214,14 @@ struct LabelLayer: Identifiable, Codable, Hashable {
             forKey: .imagePreviewMode
         ) ?? .printResult
         imageScaleMode = try values.decodeIfPresent(LabelImageScaleMode.self, forKey: .imageScaleMode) ?? .fit
+        if kind == .text, abs(height - fontSizeMM) < 0.051 {
+            height = LabelTextMetrics.automaticHeightMM(
+                family: fontName,
+                fontSizeMM: fontSizeMM,
+                isBold: isBold,
+                isItalic: isItalic
+            )
+        }
     }
 
     func encode(to encoder: Encoder) throws {
@@ -244,7 +252,19 @@ struct LabelLayer: Identifiable, Codable, Hashable {
     }
 
     static func text(_ value: String, x: Double, y: Double, fontSizeMM: Double) -> LabelLayer {
-        LabelLayer(kind: .text, name: value, x: x, y: y, width: 32, height: fontSizeMM, text: value, fontSizeMM: fontSizeMM)
+        LabelLayer(
+            kind: .text,
+            name: value,
+            x: x,
+            y: y,
+            width: 32,
+            height: LabelTextMetrics.automaticHeightMM(
+                family: ".AppleSystemUIFont",
+                fontSizeMM: fontSizeMM
+            ),
+            text: value,
+            fontSizeMM: fontSizeMM
+        )
     }
 
     static func shape(_ kind: Kind, x: Double, y: Double) -> LabelLayer {

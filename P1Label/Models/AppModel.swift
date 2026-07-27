@@ -39,10 +39,22 @@ final class AppModel {
         didSet { preferences.set(printInverted, forKey: "printInverted") }
     }
     var calibrationOffsetX: Double {
-        didSet { preferences.set(calibrationOffsetX, forKey: "printOffsetX") }
+        didSet {
+            let normalized = Self.normalizedCalibrationOffset(calibrationOffsetX)
+            if calibrationOffsetX != normalized {
+                calibrationOffsetX = normalized
+            }
+            preferences.set(normalized, forKey: "printOffsetX")
+        }
     }
     var calibrationOffsetY: Double {
-        didSet { preferences.set(calibrationOffsetY, forKey: "printOffsetY") }
+        didSet {
+            let normalized = Self.normalizedCalibrationOffset(calibrationOffsetY)
+            if calibrationOffsetY != normalized {
+                calibrationOffsetY = normalized
+            }
+            preferences.set(normalized, forKey: "printOffsetY")
+        }
     }
     let bluetoothDiscovery = BluetoothDiscovery()
     private let usbTransport = P1USBTransport()
@@ -60,8 +72,12 @@ final class AppModel {
 
     init(preferences: UserDefaults = .standard) {
         self.preferences = preferences
-        calibrationOffsetX = preferences.double(forKey: "printOffsetX")
-        calibrationOffsetY = preferences.double(forKey: "printOffsetY")
+        calibrationOffsetX = Self.normalizedCalibrationOffset(
+            preferences.double(forKey: "printOffsetX")
+        )
+        calibrationOffsetY = Self.normalizedCalibrationOffset(
+            preferences.double(forKey: "printOffsetY")
+        )
         gapLengthMM = preferences.object(forKey: "gapLengthMM") == nil
             ? 2
             : preferences.integer(forKey: "gapLengthMM")
@@ -589,6 +605,8 @@ final class AppModel {
     func refreshUSBDevices() {
         usbDevices = P1USBDiscovery.connectedDevices()
         guard !usbDevices.isEmpty else {
+            printerPortStatus = nil
+            deviceStatus = nil
             printStatus = "未检测到德佟 P1，请检查 USB 连接。"
             return
         }
@@ -750,6 +768,11 @@ final class AppModel {
 
     private func formatMillimeters(_ value: Double) -> String {
         value.formatted(.number.precision(.fractionLength(0...1)))
+    }
+
+    private static func normalizedCalibrationOffset(_ value: Double) -> Double {
+        let rounded = (min(10, max(-10, value)) * 10).rounded() / 10
+        return abs(rounded) < 0.000_1 ? 0 : rounded
     }
 }
 

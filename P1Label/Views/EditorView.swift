@@ -792,10 +792,24 @@ private struct TextContentSection: View {
                     }
                 }
                 .pickerStyle(.menu)
+                .onChange(of: layer.fontName) { oldValue, newValue in
+                    updateAutomaticHeight(oldFamily: oldValue, newFamily: newValue)
+                }
                 TextField("字号 (mm)", value: $layer.fontSizeMM, format: .number.precision(.fractionLength(1)))
                     .onChange(of: layer.fontSizeMM) { oldValue, newValue in
-                        if abs(layer.height - oldValue) < 0.01 {
-                            layer.height = max(1, newValue)
+                        if LabelTextMetrics.isAutomaticHeight(
+                            layer.height,
+                            family: layer.fontName,
+                            fontSizeMM: oldValue,
+                            isBold: layer.isBold,
+                            isItalic: layer.isItalic
+                        ) {
+                            layer.height = LabelTextMetrics.automaticHeightMM(
+                                family: layer.fontName,
+                                fontSizeMM: newValue,
+                                isBold: layer.isBold,
+                                isItalic: layer.isItalic
+                            )
                         }
                     }
                 HStack(spacing: 6) {
@@ -807,6 +821,12 @@ private struct TextContentSection: View {
                 }
                 .accessibilityElement(children: .contain)
                 .accessibilityLabel("文字格式")
+                .onChange(of: layer.isBold) { oldValue, newValue in
+                    updateAutomaticHeight(oldBold: oldValue, newBold: newValue)
+                }
+                .onChange(of: layer.isItalic) { oldValue, newValue in
+                    updateAutomaticHeight(oldItalic: oldValue, newItalic: newValue)
+                }
                 Picker("对齐", selection: $layer.textAlignment) {
                     Label("左对齐", systemImage: "text.alignleft").tag(LabelTextAlignment.leading)
                     Label("居中", systemImage: "text.aligncenter").tag(LabelTextAlignment.center)
@@ -872,6 +892,54 @@ private struct TextContentSection: View {
                     .foregroundStyle(.secondary)
             }
         }
+    }
+
+    private func updateAutomaticHeight(oldFamily: String, newFamily: String) {
+        guard LabelTextMetrics.isAutomaticHeight(
+            layer.height,
+            family: oldFamily,
+            fontSizeMM: layer.fontSizeMM,
+            isBold: layer.isBold,
+            isItalic: layer.isItalic
+        ) else { return }
+        layer.height = LabelTextMetrics.automaticHeightMM(
+            family: newFamily,
+            fontSizeMM: layer.fontSizeMM,
+            isBold: layer.isBold,
+            isItalic: layer.isItalic
+        )
+    }
+
+    private func updateAutomaticHeight(oldBold: Bool, newBold: Bool) {
+        guard LabelTextMetrics.isAutomaticHeight(
+            layer.height,
+            family: layer.fontName,
+            fontSizeMM: layer.fontSizeMM,
+            isBold: oldBold,
+            isItalic: layer.isItalic
+        ) else { return }
+        layer.height = LabelTextMetrics.automaticHeightMM(
+            family: layer.fontName,
+            fontSizeMM: layer.fontSizeMM,
+            isBold: newBold,
+            isItalic: layer.isItalic
+        )
+    }
+
+    private func updateAutomaticHeight(oldItalic: Bool, newItalic: Bool) {
+        guard LabelTextMetrics.isAutomaticHeight(
+            layer.height,
+            family: layer.fontName,
+            fontSizeMM: layer.fontSizeMM,
+            isBold: layer.isBold,
+            isItalic: oldItalic
+        ) else { return }
+        layer.height = LabelTextMetrics.automaticHeightMM(
+            family: layer.fontName,
+            fontSizeMM: layer.fontSizeMM,
+            isBold: layer.isBold,
+            isItalic: newItalic
+        )
     }
 }
 

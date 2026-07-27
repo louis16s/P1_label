@@ -349,9 +349,27 @@ struct P1ProtocolTests {
         #expect(relaunchedModel.printCopies == 4)
     }
 
-    @Test func defaultTextBoxHeightMatchesFontHeight() {
+    @Test func defaultTextBoxHeightMatchesFontLineMetrics() {
         let layer = LabelLayer.text("文字", x: 0, y: 0, fontSizeMM: 3.5)
-        #expect(layer.height == 3.5)
+        #expect(layer.height == LabelTextMetrics.automaticHeightMM(
+            family: layer.fontName,
+            fontSizeMM: layer.fontSizeMM
+        ))
+        #expect(layer.height > layer.fontSizeMM)
+    }
+
+    @MainActor
+    @Test func printOffsetsRoundToOneDecimalPlace() {
+        let suiteName = "P1LabelTests.offsetPrecision.\(UUID().uuidString)"
+        let preferences = UserDefaults(suiteName: suiteName)!
+        defer { preferences.removePersistentDomain(forName: suiteName) }
+        let model = AppModel(preferences: preferences)
+        model.calibrationOffsetX = 0.14
+        model.calibrationOffsetY = -0.16
+        #expect(model.calibrationOffsetX == 0.1)
+        #expect(model.calibrationOffsetY == -0.2)
+        model.calibrationOffsetX = 12
+        #expect(model.calibrationOffsetX == 10)
     }
 
     @Test func sdkDeviceStatusMapsPaperCoverAndHeatErrors() {

@@ -27,7 +27,7 @@ struct PrinterView: View {
                     }
                 }
             }
-            Section("设备状态") {
+            Section("打印机状态") {
                 if let status = displayedDeviceStatus {
                     HStack(alignment: .top, spacing: 10) {
                         Image(systemName: statusIcon(status))
@@ -50,13 +50,13 @@ struct PrinterView: View {
                     Text("连接打印机后可读取缺纸、开盖、过热等状态。")
                         .foregroundStyle(.secondary)
                 }
-                Button("读取打印机状态", systemImage: "waveform.path.ecg") {
+                Button("刷新打印机状态", systemImage: "arrow.clockwise") {
                     model.refreshPrinterStatus()
                 }
                 .disabled(!model.hasConnectedPrinter)
             }
-            Section("USB") {
-                LabeledContent("目标设备", value: "VID 3533 · PID 5A11")
+            Section("USB 目标设备") {
+                LabeledContent("目标设备", value: "DeTong P1 · VID 3533 · PID 5A11")
                 if model.usbDevices.isEmpty {
                     Text("当前未检测到 P1。请接入 USB 后刷新。")
                         .foregroundStyle(.secondary)
@@ -64,18 +64,19 @@ struct PrinterView: View {
                     ForEach(model.usbDevices) { device in
                         LabeledContent(device.productName, value: device.locationID.map { String(format: "位置 %08X", $0) } ?? "已连接")
                     }
+                    LabeledContent(
+                        "端口状态",
+                        value: model.printerPortStatus?.displayName ?? "等待读取"
+                    )
                 }
                 HStack {
-                    Button("刷新连接", systemImage: "arrow.clockwise") { model.refreshUSBDevices() }
-                    Button("读取状态", systemImage: "waveform.path.ecg") { model.refreshPrinterStatus() }
-                        .disabled(model.usbDevices.isEmpty)
+                    Button("刷新连接", systemImage: "arrow.clockwise") {
+                        refreshUSBConnection()
+                    }
                     Button("验证打印通道", systemImage: "checkmark.circle") { model.verifyUSBInterface() }
                         .disabled(model.usbDevices.isEmpty || model.isVerifyingUSB)
                     Button("打印校准页…", systemImage: "printer") { model.prepareTestPrint() }
                         .disabled(model.usbDevices.isEmpty)
-                }
-                if let status = model.printerPortStatus {
-                    LabeledContent("端口状态", value: status.displayName)
                 }
             }
             Section("纸张与打印") {
@@ -157,7 +158,7 @@ struct PrinterView: View {
         .navigationTitle("打印机")
         .task {
             if model.usbDevices.isEmpty {
-                model.refreshUSBDevices()
+                refreshUSBConnection()
             }
         }
         .alert("确认打印校准页", isPresented: Binding(
@@ -181,6 +182,13 @@ struct PrinterView: View {
         case .connecting(let name): "正在连接 \(name)…"
         case .connected(let name): "已连接 \(name)"
         case .failed(let reason): reason
+        }
+    }
+
+    private func refreshUSBConnection() {
+        model.refreshUSBDevices()
+        if !model.usbDevices.isEmpty {
+            model.refreshPrinterStatus()
         }
     }
 
