@@ -146,7 +146,15 @@ enum LabelRasterizer {
                     algorithm: layer.imageAlgorithm,
                     scaleMode: layer.imageScaleMode
                ) {
-                context.draw(image, in: rect)
+                // The document context uses a top-left origin. A CGImage drawn
+                // directly into that flipped context is vertically mirrored,
+                // unlike AppKit text and NSImage drawing. Flip only the local
+                // image rectangle so the printed result matches the preview.
+                context.saveGState()
+                context.translateBy(x: rect.minX, y: rect.maxY)
+                context.scaleBy(x: 1, y: -1)
+                context.draw(image, in: CGRect(origin: .zero, size: rect.size))
+                context.restoreGState()
             }
 
         case .qrCode:

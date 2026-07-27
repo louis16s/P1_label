@@ -103,7 +103,7 @@ enum PhotoCalibrationAnalyzer {
             throw PhotoCalibrationError.paperEdgeNotFound
         }
 
-        let candidates = observations.map {
+        var candidates = observations.map {
             RectangleCandidate(
                 quad: Quadrilateral(
                     topLeft: aspectCorrected($0.topLeft, imageAspect: imageAspect),
@@ -114,7 +114,18 @@ enum PhotoCalibrationAnalyzer {
                 confidence: Double($0.confidence)
             )
         }
-
+        let referenceFrame = candidates
+            .filter {
+                let aspect = $0.quad.averageWidth / max($0.quad.averageHeight, 0.000_1)
+                return abs(log(aspect / (paper.widthMM / paper.heightMM))) < 0.35
+            }
+            .max(by: { $0.quad.area < $1.quad.area })?
+            .quad
+        candidates += brightPaperCandidates(
+            imageSource: source,
+            expectedAspect: paper.widthMM / paper.heightMM,
+            around: referenceFrame
+        )
         guard let pair = bestNestedPair(in: candidates, paper: paper, imageAspect: imageAspect) else {
             throw observations.isEmpty
                 ? PhotoCalibrationError.paperEdgeNotFound
@@ -239,6 +250,260 @@ enum PhotoCalibrationAnalyzer {
 
     private static func aspectCorrected(_ point: CGPoint, imageAspect: Double) -> CGPoint {
         CGPoint(x: Double(point.x) * imageAspect, y: point.y)
+    }
+
+    /// Rounded label stock is deliberately not accepted by Vision's strict
+    /// rectangle detector. On the dark background requested by the UI, its
+    /// white outer margin is still a connected bright contour. These
+    /// candidates supplement (rather than replace) Vision's printed-frame
+    /// observations.
+    private static func brightPaperCandidates(
+        imageSource: CGImageSource,
+        expectedAspect: Double,
+        around referenceFrame: Quadrilateral?
+    ) -> [RectangleCandidate] {
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: 1_200,
+            kCGImageSourceShouldCacheImmediately: true
+        ]
+        guard let image = CGImageSourceCreateThumbnailAtIndex(
+            imageSource,
+            0,
+            options as CFDictionary
+        ) else { return [] }
+        let width = image.width
+        let height = image.height
+        guard width > 0, height > 0 else { return [] }
+
+        let bytesPerRow = width * 4
+        var pixels = [UInt8](repeating: 0, count: bytesPerRow * height)
+        guard let context = CGContext(
+            data: &pixels,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: bytesPerRow,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGBitmapInfo.byteOrder32Big.rawValue
+                | CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else { return [] }
+        context.translateBy(x: 0, y: CGFloat(height))
+        context.scaleBy(x: 1, y: -1)
+        context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+
+        let count = width * height
+        var isBright = [Bool](repeating: false, count: count)
+        var histogram = [Int](repeating: 0, count: 256)
+        for index in 0..<count {
+            let offset = index * 4
+            let luminance = (
+                Int(pixels[offset]) * 299
+                + Int(pixels[offset + 1]) * 587
+                + Int(pixels[offset + 2]) * 114
+            ) / 1000
+            histogram[luminance] += 1
+        }
+        let brightCutoff = max(105, min(155, otsuThreshold(histogram: histogram, count: count)))
+        for index in 0..<count {
+            let offset = index * 4
+            let luminance = (
+                Int(pixels[offset]) * 299
+                + Int(pixels[offset + 1]) * 587
+                + Int(pixels[offset + 2]) * 114
+            ) / 1000
+            isBright[index] = pixels[offset + 3] > 16 && luminance >= brightCutoff
+        }
+        let envelopeMask = isBright
+        isBright = dilated(isBright, width: width, height: height, radius: 5)
+
+        var visited = [Bool](repeating: false, count: count)
+        var results: [RectangleCandidate] = []
+        let imageAspect = Double(width) / Double(height)
+        let minimumComponentSize = max(80, count / 15_000)
+        if let referenceFrame,
+           let envelope = brightEnvelope(
+                mask: envelopeMask,
+                width: width,
+                height: height,
+                imageAspect: imageAspect,
+                around: referenceFrame
+           ) {
+            results.append(.init(quad: envelope, confidence: 0.86))
+        }
+
+        for seed in 0..<count where isBright[seed] && !visited[seed] {
+            visited[seed] = true
+            var queue = [seed]
+            var queueIndex = 0
+            var pixelCount = 0
+            var topLeft = (x: width, y: height, metric: Int.max)
+            var topRight = (x: 0, y: height, metric: Int.min)
+            var bottomRight = (x: 0, y: 0, metric: Int.min)
+            var bottomLeft = (x: width, y: 0, metric: Int.max)
+
+            while queueIndex < queue.count {
+                let index = queue[queueIndex]
+                queueIndex += 1
+                pixelCount += 1
+                let x = index % width
+                let y = index / width
+                let sum = x + y
+                let difference = x - y
+                if sum < topLeft.metric { topLeft = (x, y, sum) }
+                if difference > topRight.metric { topRight = (x, y, difference) }
+                if sum > bottomRight.metric { bottomRight = (x, y, sum) }
+                if difference < bottomLeft.metric { bottomLeft = (x, y, difference) }
+
+                if x > 0 {
+                    appendBright(index - 1, isBright: isBright, visited: &visited, queue: &queue)
+                }
+                if x + 1 < width {
+                    appendBright(index + 1, isBright: isBright, visited: &visited, queue: &queue)
+                }
+                if y > 0 {
+                    appendBright(index - width, isBright: isBright, visited: &visited, queue: &queue)
+                }
+                if y + 1 < height {
+                    appendBright(index + width, isBright: isBright, visited: &visited, queue: &queue)
+                }
+            }
+
+            guard pixelCount >= minimumComponentSize else { continue }
+            let quad = Quadrilateral(
+                topLeft: normalized(bottomLeft, width: width, height: height, imageAspect: imageAspect),
+                topRight: normalized(bottomRight, width: width, height: height, imageAspect: imageAspect),
+                bottomRight: normalized(topRight, width: width, height: height, imageAspect: imageAspect),
+                bottomLeft: normalized(topLeft, width: width, height: height, imageAspect: imageAspect)
+            )
+            let areaFraction = quad.area / imageAspect
+            let aspect = quad.averageWidth / max(quad.averageHeight, 0.000_1)
+            guard areaFraction > 0.08,
+                  areaFraction < 0.85,
+                  abs(log(aspect / expectedAspect)) < 0.45 else { continue }
+            results.append(.init(quad: quad, confidence: 0.78))
+        }
+        return results
+    }
+
+    private static func brightEnvelope(
+        mask: [Bool],
+        width: Int,
+        height: Int,
+        imageAspect: Double,
+        around reference: Quadrilateral
+    ) -> Quadrilateral? {
+        let referenceX = reference.points.map { Double($0.x) / imageAspect * Double(width) }
+        let referenceY = reference.points.map { Double($0.y) * Double(height) }
+        guard let minimumReferenceX = referenceX.min(),
+              let maximumReferenceX = referenceX.max(),
+              let minimumReferenceY = referenceY.min(),
+              let maximumReferenceY = referenceY.max() else { return nil }
+        let expansionX = (maximumReferenceX - minimumReferenceX) * 0.10
+        let expansionY = (maximumReferenceY - minimumReferenceY) * 0.10
+        let minimumX = max(0, Int((minimumReferenceX - expansionX).rounded(.down)))
+        let maximumX = min(width - 1, Int((maximumReferenceX + expansionX).rounded(.up)))
+        let minimumY = max(0, Int((minimumReferenceY - expansionY).rounded(.down)))
+        let maximumY = min(height - 1, Int((maximumReferenceY + expansionY).rounded(.up)))
+
+        var topLeft = (x: width, y: height, metric: Int.max)
+        var topRight = (x: 0, y: height, metric: Int.min)
+        var bottomRight = (x: 0, y: 0, metric: Int.min)
+        var bottomLeft = (x: width, y: 0, metric: Int.max)
+        var found = 0
+        for y in minimumY...maximumY {
+            for x in minimumX...maximumX where mask[y * width + x] {
+                found += 1
+                let sum = x + y
+                let difference = x - y
+                if sum < topLeft.metric { topLeft = (x, y, sum) }
+                if difference > topRight.metric { topRight = (x, y, difference) }
+                if sum > bottomRight.metric { bottomRight = (x, y, sum) }
+                if difference < bottomLeft.metric { bottomLeft = (x, y, difference) }
+            }
+        }
+        guard found > 100 else { return nil }
+        return Quadrilateral(
+            topLeft: normalized(bottomLeft, width: width, height: height, imageAspect: imageAspect),
+            topRight: normalized(bottomRight, width: width, height: height, imageAspect: imageAspect),
+            bottomRight: normalized(topRight, width: width, height: height, imageAspect: imageAspect),
+            bottomLeft: normalized(topLeft, width: width, height: height, imageAspect: imageAspect)
+        )
+    }
+
+    private static func appendBright(
+        _ index: Int,
+        isBright: [Bool],
+        visited: inout [Bool],
+        queue: inout [Int]
+    ) {
+        guard isBright[index], !visited[index] else { return }
+        visited[index] = true
+        queue.append(index)
+    }
+
+    private static func dilated(
+        _ source: [Bool],
+        width: Int,
+        height: Int,
+        radius: Int
+    ) -> [Bool] {
+        var horizontal = [Bool](repeating: false, count: source.count)
+        for y in 0..<height {
+            for x in 0..<width where source[y * width + x] {
+                for targetX in max(0, x - radius)...min(width - 1, x + radius) {
+                    horizontal[y * width + targetX] = true
+                }
+            }
+        }
+        var result = [Bool](repeating: false, count: source.count)
+        for y in 0..<height {
+            for x in 0..<width where horizontal[y * width + x] {
+                for targetY in max(0, y - radius)...min(height - 1, y + radius) {
+                    result[targetY * width + x] = true
+                }
+            }
+        }
+        return result
+    }
+
+    private static func normalized(
+        _ point: (x: Int, y: Int, metric: Int),
+        width: Int,
+        height: Int,
+        imageAspect: Double
+    ) -> CGPoint {
+        CGPoint(
+            x: (Double(point.x) / Double(width)) * imageAspect,
+            y: Double(point.y) / Double(height)
+        )
+    }
+
+    private static func otsuThreshold(histogram: [Int], count: Int) -> Int {
+        let weightedTotal = histogram.enumerated().reduce(0.0) {
+            $0 + Double($1.offset * $1.element)
+        }
+        var backgroundCount = 0.0
+        var backgroundWeighted = 0.0
+        var bestVariance = -1.0
+        var bestLevel = 160
+        for level in histogram.indices {
+            backgroundCount += Double(histogram[level])
+            guard backgroundCount > 0 else { continue }
+            let foregroundCount = Double(count) - backgroundCount
+            guard foregroundCount > 0 else { break }
+            backgroundWeighted += Double(level * histogram[level])
+            let backgroundMean = backgroundWeighted / backgroundCount
+            let foregroundMean = (weightedTotal - backgroundWeighted) / foregroundCount
+            let difference = backgroundMean - foregroundMean
+            let variance = backgroundCount * foregroundCount * difference * difference
+            if variance > bestVariance {
+                bestVariance = variance
+                bestLevel = level
+            }
+        }
+        return bestLevel
     }
 
     private struct ProjectiveTransform {

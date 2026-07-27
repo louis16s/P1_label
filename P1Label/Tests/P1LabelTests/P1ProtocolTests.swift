@@ -25,6 +25,56 @@ struct P1ProtocolTests {
         #expect(abs(result.rotationDegrees) < 0.001)
     }
 
+    @Test func photoCalibrationRecognizesRoundedPaperOnDarkBackground() throws {
+        let width = 800
+        let height = 600
+        guard let context = CGContext(
+            data: nil,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: width * 4,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else {
+            Issue.record("无法创建校准测试图片")
+            return
+        }
+        context.setFillColor(NSColor(calibratedWhite: 0.08, alpha: 1).cgColor)
+        context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        let paperRect = CGRect(x: 200, y: 150, width: 400, height: 300)
+        context.setFillColor(NSColor.white.cgColor)
+        context.addPath(CGPath(
+            roundedRect: paperRect,
+            cornerWidth: 14,
+            cornerHeight: 14,
+            transform: nil
+        ))
+        context.fillPath()
+        context.setStrokeColor(NSColor.black.cgColor)
+        context.setLineWidth(3)
+        context.stroke(CGRect(x: 210, y: 160, width: 380, height: 280))
+
+        let image = try #require(context.makeImage())
+        let png = try #require(
+            NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:])
+        )
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("圆角定位标签.png")
+        try png.write(to: url)
+
+        let result = try PhotoCalibrationAnalyzer.analyze(
+            photoURL: url,
+            paper: PaperSize(widthMM: 40, heightMM: 30)
+        )
+        #expect(abs(result.horizontalOffsetMM) < 0.3)
+        #expect(abs(result.verticalOffsetMM) < 0.3)
+        #expect(result.confidence >= 0.58)
+    }
+
     @Test func blankDocumentStartsWithoutObjects() {
         #expect(LabelDocument.blank.layers.isEmpty)
     }
@@ -451,6 +501,53 @@ struct P1ProtocolTests {
             scaleMode: .fill
         ))
         #expect((color.dataProvider?.data as Data?) != (grayscale.dataProvider?.data as Data?))
+    }
+
+    @Test func printedImageKeepsTopToBottomOrientation() throws {
+        guard let sourceContext = CGContext(
+            data: nil,
+            width: 8,
+            height: 8,
+            bitsPerComponent: 8,
+            bytesPerRow: 8 * 4,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else {
+            Issue.record("无法创建方向测试图片")
+            return
+        }
+        sourceContext.setFillColor(NSColor.white.cgColor)
+        sourceContext.fill(CGRect(x: 0, y: 0, width: 8, height: 8))
+        sourceContext.setFillColor(NSColor.black.cgColor)
+        sourceContext.fill(CGRect(x: 0, y: 4, width: 8, height: 4))
+        let sourceImage = try #require(sourceContext.makeImage())
+        let png = try #require(
+            NSBitmapImageRep(cgImage: sourceImage).representation(using: .png, properties: [:])
+        )
+
+        var layer = LabelLayer.image(png, name: "方向测试", x: 0, y: 0)
+        layer.width = 4
+        layer.height = 4
+        layer.imageAlgorithm = .threshold
+        layer.imageThreshold = 0.5
+        layer.imageScaleMode = .fill
+        let document = LabelDocument(
+            name: "方向测试",
+            paper: PaperSize(widthMM: 48, heightMM: 8),
+            layers: [layer]
+        )
+        let raster = try LabelRasterizer.raster(
+            document: document,
+            horizontalOffsetMM: 0,
+            verticalOffsetMM: 0
+        )
+        let topInk = (0..<16).reduce(0) { total, y in
+            total + (0..<32).count(where: { raster[$0, y] })
+        }
+        let bottomInk = (16..<32).reduce(0) { total, y in
+            total + (0..<32).count(where: { raster[$0, y] })
+        }
+        #expect(topInk > bottomInk)
     }
 
     @MainActor
