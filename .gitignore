@@ -1,0 +1,8 @@
+.DS_Store
+.build/
+.swiftpm/
+.codex/
+dist/
+outputs/
+work/
+*.xcuserstate
