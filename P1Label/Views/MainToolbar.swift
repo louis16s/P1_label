@@ -1,45 +1,62 @@
 import SwiftUI
 
-struct MainToolbar: CustomizableToolbarContent {
+struct MainToolbar: ToolbarContent {
     @Environment(\.openWindow) private var openWindow
     @Bindable var model: AppModel
 
-    var body: some CustomizableToolbarContent {
-        ToolbarItem(id: "document-title", placement: .navigation) {
+    var body: some ToolbarContent {
+        ToolbarItem(placement: .navigation) {
             EditableLabelTitle(model: model)
         }
-        ToolbarItem(id: "insert", placement: .primaryAction) {
+        ToolbarItemGroup(placement: .primaryAction) {
             Menu("添加", systemImage: "plus") {
-                Button("文字", systemImage: "textformat") { model.addTextLayer() }
-                Button("图片…", systemImage: "photo") { model.requestImportImage() }
+                Button("文字", systemImage: "textformat") {
+                    model.addTextLayer()
+                }
+                Button("图片…", systemImage: "photo") {
+                    model.requestImportImage()
+                }
                 Divider()
-                Button("二维码", systemImage: "qrcode") { model.addShapeLayer(.qrCode) }
-                Button("Code 128 条码", systemImage: "barcode") { model.addShapeLayer(.barcode) }
-                Button("矩形", systemImage: "rectangle") { model.addShapeLayer(.rectangle) }
-                Button("圆形", systemImage: "circle") { model.addShapeLayer(.ellipse) }
-                Button("直线", systemImage: "line.diagonal") { model.addShapeLayer(.line) }
+                Button("二维码", systemImage: "qrcode") {
+                    model.addShapeLayer(.qrCode)
+                }
+                Button("Code 128 条码", systemImage: "barcode") {
+                    model.addShapeLayer(.barcode)
+                }
+                Button("矩形", systemImage: "rectangle") {
+                    model.addShapeLayer(.rectangle)
+                }
+                Button("圆形", systemImage: "circle") {
+                    model.addShapeLayer(.ellipse)
+                }
+                Button("直线", systemImage: "line.diagonal") {
+                    model.addShapeLayer(.line)
+                }
             }
-        }
-        ToolbarItem(id: "document-actions", placement: .primaryAction) {
-            Menu("标签文件", systemImage: "doc") {
-                Button("打开标签…", systemImage: "folder") { model.requestOpenDocument() }
-                Button("保存", systemImage: "square.and.arrow.down") { model.requestSave() }
-                Button("另存为…", systemImage: "doc.badge.plus") { model.requestSaveAs() }
+            Menu("文件", systemImage: "doc") {
+                Button("保存", systemImage: "square.and.arrow.down") {
+                    model.requestSave()
+                }
+                Button("另存为…", systemImage: "doc.badge.plus") {
+                    model.requestSaveAs()
+                }
                 Divider()
-                Button("导入 CSV 批量数据…", systemImage: "tablecells") { model.requestImportCSV() }
-                Button("导出标签副本…", systemImage: "square.and.arrow.up") { model.requestExportCopy() }
+                Button("导入标签…", systemImage: "square.and.arrow.down.on.square") {
+                    model.requestOpenDocument()
+                }
+                Button("导入 CSV 批量数据…", systemImage: "tablecells") {
+                    model.requestImportCSV()
+                }
+                Button("导出副本…", systemImage: "square.and.arrow.up") {
+                    model.requestExportCopy()
+                }
             }
-        }
-        ToolbarItem(id: "printer-settings", placement: .primaryAction) {
-            Button("打印机设置", systemImage: "printer.badge.gearshape") {
+            Button("打印机设置", systemImage: "gearshape") {
                 openWindow(id: "printer")
             }
-        }
-        ToolbarItem(id: "print", placement: .primaryAction) {
-            Button("打印标签", systemImage: "printer.fill") {
+            Button("打印标签", systemImage: "printer") {
                 model.prepareDocumentPrint()
             }
-            .disabled(model.document.layers.isEmpty)
         }
     }
 }
