@@ -12,71 +12,59 @@ struct PrinterView: View {
     var body: some View {
         Form {
             Section {
-                HStack(spacing: 12) {
+                HStack(alignment: .top, spacing: 12) {
                     Image(systemName: model.hasConnectedPrinter ? "printer.fill" : "printer")
                         .font(.system(size: 30))
-                        .foregroundStyle(model.hasConnectedPrinter ? Color.accentColor : .secondary)
+                        .foregroundStyle(connectionStatusColor)
                     VStack(alignment: .leading, spacing: 3) {
                         Text(model.hasConnectedPrinter ? model.activePrintConnectionName : "尚未连接")
                             .font(.headline)
-                        Text(model.bluetoothDiscovery.isConnected
-                             ? "蓝牙打印通道已就绪"
-                             : model.printStatus)
+                        Text(connectionStatusTitle)
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(connectionStatusColor)
+                        Text(connectionStatusDetail)
                             .font(.caption)
                             .foregroundStyle(.secondary)
-                    }
-                }
-            }
-            Section("打印机状态") {
-                if let status = displayedDeviceStatus {
-                    HStack(alignment: .top, spacing: 10) {
-                        Image(systemName: statusIcon(status))
-                            .foregroundStyle(statusColor(status))
-                            .font(.title3)
-                            .frame(width: 24)
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(status.title).font(.headline)
-                            Text(status.detail)
-                                .font(.caption)
+                        if let code = displayedDeviceStatus?.code, code != 0 {
+                            Text("SDK 状态码 \(code)")
+                                .font(.caption2.monospaced())
                                 .foregroundStyle(.secondary)
-                            if let code = status.code, code != 0 {
-                                Text("SDK 状态码 \(code)")
-                                    .font(.caption2.monospaced())
-                                    .foregroundStyle(.secondary)
-                            }
                         }
                     }
-                } else {
-                    Text("连接打印机后可读取缺纸、开盖、过热等状态。")
-                        .foregroundStyle(.secondary)
+
+                    Spacer()
+
+                    Button("刷新", systemImage: "arrow.clockwise") {
+                        refreshConnectionAndStatus()
+                    }
+                    .help("重新检测连接并读取打印机状态")
+                    .disabled(model.isVerifyingUSB)
                 }
-                Button("刷新打印机状态", systemImage: "arrow.clockwise") {
-                    model.refreshPrinterStatus()
-                }
-                .disabled(!model.hasConnectedPrinter)
             }
             Section("USB 目标设备") {
                 LabeledContent("目标设备", value: "DeTong P1 · VID 3533 · PID 5A11")
                 if model.usbDevices.isEmpty {
-                    Text("当前未检测到 P1。请接入 USB 后刷新。")
+                    Text("当前未检测到 P1。接入 USB 后使用上方“刷新”。")
                         .foregroundStyle(.secondary)
                 } else {
                     ForEach(model.usbDevices) { device in
-                        LabeledContent(device.productName, value: device.locationID.map { String(format: "位置 %08X", $0) } ?? "已连接")
+                        LabeledContent(
+                            device.productName,
+                            value: device.locationID.map {
+                                String(format: "位置 %08X", $0)
+                            } ?? "已连接"
+                        )
                     }
-                    LabeledContent(
-                        "端口状态",
-                        value: model.printerPortStatus?.displayName ?? "等待读取"
-                    )
                 }
                 HStack {
-                    Button("刷新连接", systemImage: "arrow.clockwise") {
-                        refreshUSBConnection()
+                    Button("验证打印通道", systemImage: "checkmark.circle") {
+                        model.verifyUSBInterface()
                     }
-                    Button("验证打印通道", systemImage: "checkmark.circle") { model.verifyUSBInterface() }
-                        .disabled(model.usbDevices.isEmpty || model.isVerifyingUSB)
-                    Button("打印校准页…", systemImage: "printer") { model.prepareTestPrint() }
-                        .disabled(model.usbDevices.isEmpty)
+                    .disabled(model.usbDevices.isEmpty || model.isVerifyingUSB)
+                    Button("打印校准页…", systemImage: "printer") {
+                        model.prepareTestPrint()
+                    }
+                    .disabled(model.usbDevices.isEmpty)
                 }
             }
             Section("纸张与打印") {
@@ -158,7 +146,7 @@ struct PrinterView: View {
         .navigationTitle("打印机")
         .task {
             if model.usbDevices.isEmpty {
-                refreshUSBConnection()
+                refreshConnectionAndStatus()
             }
         }
         .alert("确认打印校准页", isPresented: Binding(
@@ -185,7 +173,11 @@ struct PrinterView: View {
         }
     }
 
-    private func refreshUSBConnection() {
+    private func refreshConnectionAndStatus() {
+        if bluetoothDiscovery.isConnected {
+            model.refreshPrinterStatus()
+            return
+        }
         model.refreshUSBDevices()
         if !model.usbDevices.isEmpty {
             model.refreshPrinterStatus()
@@ -199,13 +191,30 @@ struct PrinterView: View {
         return model.deviceStatus
     }
 
-    private func statusIcon(_ status: P1DeviceStatus) -> String {
-        switch status.severity {
-        case .ready: "checkmark.circle.fill"
-        case .warning: "thermometer.medium"
-        case .error: "exclamationmark.triangle.fill"
-        case .unknown: "questionmark.circle"
+    private var connectionStatusTitle: String {
+        if let status = displayedDeviceStatus {
+            return status.title
         }
+        return model.hasConnectedPrinter ? "等待读取状态" : "未连接打印机"
+    }
+
+    private var connectionStatusDetail: String {
+        guard let status = displayedDeviceStatus else {
+            return model.hasConnectedPrinter
+                ? "使用“刷新”读取缺纸、开盖、过热等设备状态。"
+                : model.printStatus
+        }
+        if model.printStatus.contains("验证") {
+            return model.printStatus
+        }
+        return status.detail
+    }
+
+    private var connectionStatusColor: Color {
+        guard let status = displayedDeviceStatus else {
+            return model.hasConnectedPrinter ? Color.accentColor : .secondary
+        }
+        return statusColor(status)
     }
 
     private func statusColor(_ status: P1DeviceStatus) -> Color {
