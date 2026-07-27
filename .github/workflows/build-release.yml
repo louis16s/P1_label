@@ -1,0 +1,69 @@
+name: 构建与发布 P1 Label
+
+on:
+  push:
+    branches:
+      - "**"
+    tags:
+      - "v*"
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: p1-label-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: macOS 26 ARM64
+    runs-on: macos-26
+    permissions:
+      contents: write
+
+    steps:
+      - name: 检出源代码
+        uses: actions/checkout@v4
+
+      - name: 安装 libusb
+        run: brew install libusb
+
+      - name: 运行测试
+        run: swift test
+
+      - name: 构建独立应用
+        env:
+          P1_LABEL_VERSION: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '1.0' }}
+          P1_LABEL_BUILD_NUMBER: ${{ github.run_number }}
+        run: ./script/build_and_run.sh --package
+
+      - name: 验证应用
+        run: |
+          codesign --verify --deep --strict dist/P1Label.app
+          test "$(uname -m)" = "arm64"
+          file dist/P1Label.app/Contents/MacOS/P1Label | grep -q "arm64"
+          otool -L dist/P1Label.app/Contents/MacOS/P1Label | grep -q "@executable_path/../Frameworks/libusb-1.0.0.dylib"
+
+      - name: 制作压缩包
+        run: |
+          ditto -c -k --sequesterRsrc --keepParent \
+            dist/P1Label.app \
+            P1Label-macOS26-arm64.zip
+
+      - name: 上传自动构建
+        uses: actions/upload-artifact@v4
+        with:
+          name: P1Label-macOS26-arm64
+          path: P1Label-macOS26-arm64.zip
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: 发布 GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            P1Label-macOS26-arm64.zip \
+            --verify-tag \
+            --generate-notes \
+            --title "P1 Label ${GITHUB_REF_NAME}"

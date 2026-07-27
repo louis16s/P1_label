@@ -314,6 +314,17 @@ struct P1ProtocolTests {
     }
 
     @MainActor
+    @Test func editorPreviewCacheReusesExpensiveGeneratedImages() throws {
+        let firstQR = try #require(LabelPreviewCache.shared.qrCode("P1 Label"))
+        let secondQR = try #require(LabelPreviewCache.shared.qrCode("P1 Label"))
+        #expect(firstQR === secondQR)
+
+        let firstBarcode = try #require(LabelPreviewCache.shared.barcode("P1-0001"))
+        let secondBarcode = try #require(LabelPreviewCache.shared.barcode("P1-0001"))
+        #expect(firstBarcode === secondBarcode)
+    }
+
+    @MainActor
     @Test func imageImportValidatesAndKeepsSourceAspectRatio() throws {
         let bitmap = try #require(NSBitmapImageRep(
             bitmapDataPlanes: nil,

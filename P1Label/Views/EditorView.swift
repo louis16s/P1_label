@@ -1,35 +1,5 @@
 import AppKit
-import CoreImage
-import CoreImage.CIFilterBuiltins
 import SwiftUI
-
-enum CanvasLayout {
-    static let paperPadding = 28.0
-    static let noScrollZoom = 1.1
-    static let roundingSafety = 2.0
-
-    static func fitScale(viewport: CGSize, paper: PaperSize) -> Double {
-        let usableWidth = max(
-            1,
-            viewport.width - paperPadding * 2 - roundingSafety
-        )
-        let usableHeight = max(
-            1,
-            viewport.height - paperPadding * 2 - roundingSafety
-        )
-        return max(0.1, min(
-            usableWidth / (paper.widthMM * noScrollZoom),
-            usableHeight / (paper.heightMM * noScrollZoom)
-        ))
-    }
-
-    static func contentSize(viewport: CGSize, paper: PaperSize, scale: Double) -> CGSize {
-        CGSize(
-            width: max(viewport.width, paper.widthMM * scale + paperPadding * 2),
-            height: max(viewport.height, paper.heightMM * scale + paperPadding * 2)
-        )
-    }
-}
 
 struct EditorView: View {
     @Bindable var model: AppModel
@@ -447,9 +417,7 @@ private struct CanvasLayer: View {
         case .qrCode:
             QRCodeView(value: layer.text)
         case .barcode:
-            if let image = LabelRasterizer.barcodeImage(
-                for: layer.text.isEmpty ? "P1-0001" : layer.text
-            ) {
+            if let image = LabelPreviewCache.shared.barcode(layer.text) {
                 Image(nsImage: image)
                     .resizable()
                     .interpolation(.none)
@@ -458,20 +426,8 @@ private struct CanvasLayer: View {
                 Image(systemName: "barcode").resizable().scaledToFit()
             }
         case .image:
-            if let data = layer.imageData,
-               let image = LabelImageProcessor.previewImage(
-                    data: data,
-                    width: max(1, Int((layer.width * scale).rounded())),
-                    height: max(1, Int((layer.height * scale).rounded())),
-                    previewMode: layer.imagePreviewMode,
-                    threshold: layer.imageThreshold,
-                    algorithm: layer.imageAlgorithm,
-                    scaleMode: layer.imageScaleMode
-               ) {
-                Image(nsImage: NSImage(
-                    cgImage: image,
-                    size: NSSize(width: image.width, height: image.height)
-                ))
+            if let image = LabelPreviewCache.shared.imagePreview(for: layer, scale: scale) {
+                Image(nsImage: image)
                     .resizable()
                     .interpolation(layer.imagePreviewMode == .printResult ? .none : .high)
                     .aspectRatio(contentMode: layer.imageScaleMode == .fit ? .fit : .fill)
@@ -608,7 +564,7 @@ private struct QRCodeView: View {
     let value: String
 
     var body: some View {
-        if let image {
+        if let image = LabelPreviewCache.shared.qrCode(value) {
             Image(nsImage: image)
                 .resizable()
                 .interpolation(.none)
@@ -618,16 +574,6 @@ private struct QRCodeView: View {
         }
     }
 
-    private var image: NSImage? {
-        let filter = CIFilter.qrCodeGenerator()
-        filter.message = Data((value.isEmpty ? "P1 Label" : value).utf8)
-        filter.correctionLevel = "M"
-        guard let output = filter.outputImage else { return nil }
-        let scaled = output.transformed(by: CGAffineTransform(scaleX: 8, y: 8))
-        let context = CIContext()
-        guard let cgImage = context.createCGImage(scaled, from: scaled.extent) else { return nil }
-        return NSImage(cgImage: cgImage, size: scaled.extent.size)
-    }
 }
 
 private struct EditorInspector: View {
@@ -831,7 +777,7 @@ private struct NudgePad: View {
 
 private struct TextContentSection: View {
     @Binding var layer: LabelLayer
-    private let fontFamilies = NSFontManager.shared.availableFontFamilies
+    private static let fontFamilies = NSFontManager.shared.availableFontFamilies
 
     var body: some View {
         if layer.kind == .text {
@@ -841,7 +787,7 @@ private struct TextContentSection: View {
                 Picker("字体", selection: $layer.fontName) {
                     Text("系统字体").tag(".AppleSystemUIFont")
                     Divider()
-                    ForEach(fontFamilies, id: \.self) { family in
+                    ForEach(Self.fontFamilies, id: \.self) { family in
                         Text(family).font(.custom(family, size: 13)).tag(family)
                     }
                 }

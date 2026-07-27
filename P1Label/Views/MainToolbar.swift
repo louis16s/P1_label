@@ -73,7 +73,7 @@ private struct EditableLabelTitle: View {
                 TextField("标签名称", text: $model.document.name)
                     .textFieldStyle(.roundedBorder)
                     .font(.headline)
-                    .frame(width: 220)
+                    .frame(width: 300)
                     .focused($isFocused)
                     .onSubmit { commit() }
                     .onExitCommand { cancel() }

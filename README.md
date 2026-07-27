@@ -28,6 +28,8 @@ swift test
 
 构建脚本会在 `dist/P1Label.app` 生成应用。源代码采用 Swift Package 管理，界面使用 SwiftUI，USB 传输由精简的 C 桥接层连接 `libusb`。
 
+每次推送都会由 GitHub Actions 在 macOS 26 ARM64 环境中运行测试、构建独立应用并上传压缩包。推送形如 `v1.0.0` 的版本标签时，会自动创建 GitHub Release。
+
 ## SDK 支持范围
 
 P1 Label 没有直接链接只面向 iOS/UIKit 的 LPAPI 静态库，而是依据其公开功能和 P1 协议实现原生 macOS 版本。详细核对结果见 [SDK 功能支持矩阵](docs/SDK功能支持矩阵.md)，也可在应用的“帮助 → SDK 功能支持情况”中查看。
