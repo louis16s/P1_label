@@ -3,6 +3,16 @@ import UniformTypeIdentifiers
 
 @MainActor
 enum FilePanelService {
+    static func chooseCalibrationPhoto(completion: @escaping @MainActor (URL?) -> Void) {
+        let panel = openPanel(
+            title: "从照片自动校准",
+            message: "选择一张完整拍到定位标签四条纸边的照片",
+            prompt: "分析",
+            contentTypes: [.image]
+        )
+        present(panel, completion: completion)
+    }
+
     static func chooseImage(completion: @escaping @MainActor (URL?) -> Void) {
         let panel = NSOpenPanel()
         panel.title = "导入图片"

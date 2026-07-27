@@ -26,7 +26,10 @@ let package = Package(
             dependencies: ["P1USBBridge"],
             path: "P1Label",
             exclude: ["Tests", "CLibUSB", "P1USBBridge", "P1USBProbe", "Resources"],
-            linkerSettings: [.linkedFramework("IOKit")]
+            linkerSettings: [
+                .linkedFramework("IOKit"),
+                .linkedFramework("Vision")
+            ]
         ),
         .executableTarget(
             name: "P1USBProbe",

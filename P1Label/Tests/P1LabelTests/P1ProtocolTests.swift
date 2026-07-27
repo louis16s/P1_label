@@ -4,6 +4,27 @@ import Testing
 @testable import P1Label
 
 struct P1ProtocolTests {
+    @Test func photoCalibrationComputesOppositeCorrection() throws {
+        let result = try PhotoCalibrationAnalyzer.correction(
+            paper: .init(
+                topLeft: CGPoint(x: 0, y: 1),
+                topRight: CGPoint(x: 1, y: 1),
+                bottomRight: CGPoint(x: 1, y: 0),
+                bottomLeft: CGPoint(x: 0, y: 0)
+            ),
+            printedFrame: .init(
+                topLeft: CGPoint(x: 1.5 / 40, y: 1 - 1.5 / 30),
+                topRight: CGPoint(x: 39.5 / 40, y: 1 - 1.5 / 30),
+                bottomRight: CGPoint(x: 39.5 / 40, y: 1 - 29.5 / 30),
+                bottomLeft: CGPoint(x: 1.5 / 40, y: 1 - 29.5 / 30)
+            ),
+            paperSize: PaperSize(widthMM: 40, heightMM: 30)
+        )
+        #expect(abs(result.horizontalOffsetMM + 0.5) < 0.001)
+        #expect(abs(result.verticalOffsetMM + 0.5) < 0.001)
+        #expect(abs(result.rotationDegrees) < 0.001)
+    }
+
     @Test func blankDocumentStartsWithoutObjects() {
         #expect(LabelDocument.blank.layers.isEmpty)
     }
