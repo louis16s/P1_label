@@ -6,6 +6,13 @@ struct P1LabelApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @State private var model = AppModel()
 
+    init() {
+        // This must run before SwiftUI creates the first NSWindow. Setting it
+        // in applicationDidFinishLaunching is too late when the user's system
+        // preference is "always open windows in tabs".
+        NSWindow.allowsAutomaticWindowTabbing = false
+    }
+
     var body: some Scene {
         WindowGroup(id: "main") {
             ContentView(model: model)
@@ -78,7 +85,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func disableTabbing(for window: NSWindow) {
         window.tabbingMode = .disallowed
         window.tabbingIdentifier = ""
-        if window.tabbedWindows?.count == 1 {
+        hideTabBarIfVisible(for: window)
+        DispatchQueue.main.async { [weak self, weak window] in
+            guard let self, let window else { return }
+            self.hideTabBarIfVisible(for: window)
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self, weak window] in
+            guard let self, let window else { return }
+            self.hideTabBarIfVisible(for: window)
+        }
+    }
+
+    private func hideTabBarIfVisible(for window: NSWindow) {
+        if window.tabGroup?.isTabBarVisible == true {
             window.toggleTabBar(nil)
         }
     }

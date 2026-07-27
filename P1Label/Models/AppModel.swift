@@ -53,6 +53,7 @@ final class AppModel {
     @ObservationIgnored private var lastHistoryDate = Date.distantPast
     @ObservationIgnored private var lastSavedDocument = LabelDocument.blank
     @ObservationIgnored private var autosaveTask: Task<Void, Never>?
+    @ObservationIgnored private var isAutomaticallyDiscoveringPrinter = false
     private(set) var canUndo = false
     private(set) var canRedo = false
     private(set) var hasUnsavedChanges = false
@@ -589,6 +590,32 @@ final class AppModel {
             return
         }
         printStatus = "已通过 USB 检测到 P1"
+    }
+
+    /// Looks for a USB P1 without triggering the macOS Bluetooth permission
+    /// prompt. Bluetooth discovery remains an explicit user action.
+    func discoverPrinterAutomatically(
+        interval: Duration = .seconds(5),
+        maximumDuration: Duration = .seconds(180)
+    ) async {
+        guard !hasConnectedPrinter, !isAutomaticallyDiscoveringPrinter else { return }
+        isAutomaticallyDiscoveringPrinter = true
+        defer { isAutomaticallyDiscoveringPrinter = false }
+
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: maximumDuration)
+        while !Task.isCancelled, clock.now < deadline, !hasConnectedPrinter {
+            refreshUSBDevices()
+            if hasConnectedPrinter {
+                refreshPrinterStatus()
+                return
+            }
+            do {
+                try await clock.sleep(for: interval)
+            } catch {
+                return
+            }
+        }
     }
 
     func verifyUSBInterface() {

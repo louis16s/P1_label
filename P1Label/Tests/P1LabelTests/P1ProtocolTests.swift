@@ -300,6 +300,20 @@ struct P1ProtocolTests {
     }
 
     @MainActor
+    @Test func automaticPrinterDiscoveryStopsAtItsDeadline() async {
+        let model = AppModel()
+        await model.discoverPrinterAutomatically(
+            interval: .milliseconds(5),
+            maximumDuration: .milliseconds(20)
+        )
+        // A second run must be allowed after the first run completes.
+        await model.discoverPrinterAutomatically(
+            interval: .milliseconds(1),
+            maximumDuration: .milliseconds(2)
+        )
+    }
+
+    @MainActor
     @Test func imageImportValidatesAndKeepsSourceAspectRatio() throws {
         let bitmap = try #require(NSBitmapImageRep(
             bitmapDataPlanes: nil,

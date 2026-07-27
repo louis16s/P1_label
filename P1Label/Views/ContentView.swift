@@ -8,6 +8,9 @@ struct ContentView: View {
             .toolbar {
                 MainToolbar(model: model)
             }
+            .task {
+                await model.discoverPrinterAutomatically()
+            }
             .alert("确认打印", isPresented: Binding(
                 get: { model.pendingPrint?.source == .document },
                 set: { if !$0 { model.cancelPendingPrint() } }
