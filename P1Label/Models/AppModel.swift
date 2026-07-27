@@ -298,7 +298,8 @@ final class AppModel {
     }
 
     func addTextLayer() {
-        let layer = LabelLayer.text("双击或在右侧编辑文字", x: 4, y: 4, fontSizeMM: 3)
+        var layer = LabelLayer.text("文字", x: 4, y: 4, fontSizeMM: 3)
+        layer.name = "文本"
         document.layers.append(layer)
         selectedLayerID = layer.id
         selectedLayerIDs = [layer.id]

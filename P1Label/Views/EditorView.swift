@@ -216,6 +216,13 @@ private struct CanvasLayer: View {
                 height: max(2, layer.height * scale),
                 alignment: .topLeading
             )
+            .background {
+                if layer.kind == .text, isSelected {
+                    Rectangle()
+                        .fill(Color.white.opacity(0.94))
+                        .allowsHitTesting(false)
+                }
+            }
             .overlay {
                 if isSelected {
                     Rectangle()
@@ -386,6 +393,8 @@ private struct CanvasLayer: View {
                     .strikethrough(layer.isStrikethrough)
                     .multilineTextAlignment(layer.textAlignment.swiftUIAlignment)
                     .foregroundStyle(.black)
+                    .background(Color.white)
+                    .environment(\.colorScheme, .light)
                     .focused($isTextFocused)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: layer.textAlignment.frameAlignment)
                     .onAppear {

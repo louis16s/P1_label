@@ -18,7 +18,7 @@ P1 Label 是为德佟 P1 热敏标签打印机开发的 macOS 原生标签设计
 
 - macOS 26
 - Apple 芯片 Mac
-- Homebrew `libusb`
+- 从源码构建时需要 Homebrew `libusb`（交付的应用已内置运行库）
 
 ```sh
 brew install libusb
@@ -35,3 +35,15 @@ swift test
 P1 Label 没有直接链接只面向 iOS/UIKit 的 LPAPI 静态库，而是依据其公开功能和 P1 协议实现原生 macOS 版本。详细核对结果见 [SDK 功能支持矩阵](docs/SDK功能支持矩阵.md)，也可在应用的“帮助 → SDK 功能支持情况”中查看。
 
 固件升级未开放：在缺少官方 P1 固件校验及恢复规范时，错误升级可能造成设备损坏。
+
+## 参考项目
+
+- [lynzrand/kaori3](https://github.com/lynzrand/kaori3)：P1 通信与打印实现参考（WTFPL）
+- [cornradio/web-printer](https://github.com/cornradio/web-printer)：标签编辑交互参考（MIT）
+- [德佟官方 SDK](http://detonger.com/#/sdk/detail?sdkID=A47887F7-69D4-4865-9187-E82BD0F70E88)：设备能力与状态定义参考
+
+P1 Label 是独立的 macOS 原生实现；上述项目用于协议研究与交互设计参考。
+
+## 开源协议
+
+本项目采用 [MIT License](LICENSE)。

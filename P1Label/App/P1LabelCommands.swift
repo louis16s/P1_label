@@ -129,6 +129,7 @@ struct P1LabelCommands: Commands {
             }
             Button("SDK 功能支持情况") { openWindow(id: "sdk-support") }
             Divider()
+            Button("检查更新…") { openWindow(id: "about") }
             Button("在 GitHub 查看 P1 Label") {
                 openURL("https://github.com/louis16s/P1_label")
             }
