@@ -18,7 +18,18 @@ P1 Label 是为德佟 P1 热敏标签打印机开发的 macOS 原生标签设计
 
 - macOS 26
 - Apple 芯片 Mac
-- 从源码构建时需要 Homebrew `libusb`（交付的应用已内置运行库）
+
+## 安装与运行
+
+从 GitHub Actions 构建产物或 Release 下载 `P1Label-macOS26-arm64.zip`，解压后打开 `P1Label.app` 即可。正式交付的应用已经将 `libusb-1.0.0.dylib` 内置在应用包的 `Contents/Frameworks` 中，并使用应用内相对路径加载：
+
+- 普通用户不需要安装 Homebrew
+- 普通用户不需要单独安装 `libusb`
+- 复制 `P1Label.app` 到另一台符合要求的 Mac 后仍可独立运行
+
+## 从源码构建
+
+只有开发者从源代码编译时才需要通过 Homebrew 提供 `libusb` 的头文件和构建库：
 
 ```sh
 brew install libusb
@@ -26,7 +37,7 @@ swift test
 ./script/build_and_run.sh
 ```
 
-构建脚本会把最新可运行应用固定写入 `artifacts/latest/P1Label.app`，同时生成同目录的 `P1Label-macOS26-arm64.zip`。源代码采用 Swift Package 管理，界面使用 SwiftUI，USB 传输由精简的 C 桥接层连接 `libusb`。目录和交付约定见[本地构建与交付规范](docs/本地构建与交付规范.md)。
+构建脚本会自动把 Homebrew 提供的 `libusb` 复制进应用并修正动态链接路径，然后将最新可运行应用固定写入 `artifacts/latest/P1Label.app`，同时生成同目录的 `P1Label-macOS26-arm64.zip`。源代码采用 Swift Package 管理，界面使用 SwiftUI，USB 传输由精简的 C 桥接层连接 `libusb`。目录和交付约定见[本地构建与交付规范](docs/本地构建与交付规范.md)。
 
 每次推送都会由 GitHub Actions 在 macOS 26 ARM64 环境中运行测试、构建独立应用并上传压缩包。推送形如 `v1.0.0` 的版本标签时，会自动创建 GitHub Release。
 
