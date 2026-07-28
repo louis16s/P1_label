@@ -811,6 +811,33 @@ struct P1ProtocolTests {
         #expect(model.hasUnsavedChanges)
     }
 
+    @MainActor
+    @Test func printerStatusRemovesOnlyTrailingSentenceStops() {
+        let model = AppModel()
+
+        model.printStatus = "P1 状态：已就绪。"
+        #expect(model.printStatus == "P1 状态：已就绪")
+        model.printStatus = "连接失败．"
+        #expect(model.printStatus == "连接失败")
+        model.printStatus = "正在扫描…"
+        #expect(model.printStatus == "正在扫描…")
+    }
+
+    @MainActor
+    @Test func completedPrintReturnsToReadyWithoutOverwritingNewerStatus() async throws {
+        let model = AppModel()
+
+        model.showPrintCompletedStatus("标签已发送。", resetAfter: .milliseconds(100))
+        #expect(model.printStatus == "标签已发送")
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(model.printStatus == "已就绪")
+
+        model.showPrintCompletedStatus("第二张已发送。", resetAfter: .milliseconds(100))
+        model.printStatus = "打印机开盖。"
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(model.printStatus == "打印机开盖")
+    }
+
     @Test func alignsNarrowLabelToRightSideOfPrintHead() throws {
         let document = LabelDocument(
             name: "右对齐",

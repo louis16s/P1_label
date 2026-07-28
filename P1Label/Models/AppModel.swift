@@ -10,7 +10,11 @@ final class AppModel {
     }
     var selectedLayerID: UUID?
     var selectedLayerIDs: Set<UUID> = []
-    var printStatus = "尚未连接打印机"
+    private var storedPrintStatus = "尚未连接打印机"
+    var printStatus: String {
+        get { storedPrintStatus }
+        set { storedPrintStatus = Self.normalizedPrinterStatus(newValue) }
+    }
     var usbDevices: [P1USBDevice] = []
     var isVerifyingUSB = false
     private(set) var lastCalibrationPrintOffsetX = 0.0
@@ -68,6 +72,7 @@ final class AppModel {
     @ObservationIgnored private var lastSavedDocument = LabelDocument.blank
     @ObservationIgnored private var autosaveTask: Task<Void, Never>?
     @ObservationIgnored private var printerStatusTask: Task<Void, Never>?
+    @ObservationIgnored private var printCompletionResetTask: Task<Void, Never>?
     @ObservationIgnored private var isAutomaticallyDiscoveringPrinter = false
     private(set) var canUndo = false
     private(set) var canRedo = false
@@ -773,12 +778,21 @@ final class AppModel {
                         return
                     }
                     try await bluetoothDiscovery.send(pendingPrint.data)
-                    printStatus = "“\(pendingPrint.name)”已通过\(activePrintConnectionName)发送 \(bluetoothDiscovery.lastTransferByteCount) 字节。"
+                    showPrintCompletedStatus(
+                        "“\(pendingPrint.name)”已通过\(activePrintConnectionName)发送 \(bluetoothDiscovery.lastTransferByteCount) 字节"
+                    )
                     try? await Task.sleep(for: .milliseconds(500))
-                    deviceStatus = try? await bluetoothDiscovery.requestPrinterStatus()
+                    if let status = try? await bluetoothDiscovery.requestPrinterStatus() {
+                        deviceStatus = status
+                        if !status.isReady {
+                            printStatus = "\(status.title)：\(status.detail)"
+                        }
+                    }
                 } else {
                     try await usbTransport.send(pendingPrint.data)
-                    printStatus = "“\(pendingPrint.name)”已通过\(activePrintConnectionName)发送。"
+                    showPrintCompletedStatus(
+                        "“\(pendingPrint.name)”已通过\(activePrintConnectionName)发送"
+                    )
                 }
             } catch {
                 printStatus = error.localizedDescription
@@ -794,6 +808,30 @@ final class AppModel {
 
     private func formatMillimeters(_ value: Double) -> String {
         value.formatted(.number.precision(.fractionLength(0...1)))
+    }
+
+    func showPrintCompletedStatus(
+        _ message: String,
+        resetAfter delay: Duration = .seconds(5)
+    ) {
+        printCompletionResetTask?.cancel()
+        printStatus = message
+        let completedStatus = printStatus
+        printCompletionResetTask = Task { [weak self] in
+            do {
+                try await Task.sleep(for: delay)
+            } catch {
+                return
+            }
+            guard !Task.isCancelled, let self, self.printStatus == completedStatus else { return }
+            self.printStatus = "已就绪"
+        }
+    }
+
+    static func normalizedPrinterStatus(_ status: String) -> String {
+        status
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "。.．"))
     }
 
     private static func normalizedCalibrationOffset(_ value: Double) -> Double {

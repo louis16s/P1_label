@@ -44,7 +44,7 @@ struct PrinterView: View {
             Section("USB 目标设备") {
                 LabeledContent("目标设备", value: "DeTong P1 · VID 3533 · PID 5A11")
                 if model.usbDevices.isEmpty {
-                    Text("当前未检测到 P1。接入 USB 后使用上方“刷新”。")
+                    Text("当前未检测到 P1，接入 USB 后使用上方“刷新”")
                         .foregroundStyle(.secondary)
                 } else {
                     ForEach(model.usbDevices) { device in
@@ -98,7 +98,7 @@ struct PrinterView: View {
                     model.preparePaperCalibration()
                 }
                 .disabled(!model.hasConnectedPrinter || model.paperMode == .continuous)
-                Text("分页协议会提交页高和间隙长度，并在页结束时由传感器定位下一张标签。")
+                Text("分页协议会提交页高和间隙长度，并在页结束时由传感器定位下一张标签")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -112,7 +112,7 @@ struct PrinterView: View {
                         .disabled(model.bluetoothDiscovery.state != .scanning)
                 }
                 if model.bluetoothDiscovery.peripherals.isEmpty {
-                    Text("尚未发现蓝牙设备。")
+                    Text("尚未发现蓝牙设备")
                         .foregroundStyle(.secondary)
                 } else {
                     ForEach(model.bluetoothDiscovery.peripherals) { device in
@@ -169,7 +169,7 @@ struct PrinterView: View {
         case .scanning: "正在扫描…"
         case .connecting(let name): "正在连接 \(name)…"
         case .connected(let name): "已连接 \(name)"
-        case .failed(let reason): reason
+        case .failed(let reason): AppModel.normalizedPrinterStatus(reason)
         }
     }
 
@@ -201,13 +201,13 @@ struct PrinterView: View {
     private var connectionStatusDetail: String {
         guard let status = displayedDeviceStatus else {
             return model.hasConnectedPrinter
-                ? "使用“刷新”读取缺纸、开盖、过热等设备状态。"
+                ? "使用“刷新”读取缺纸、开盖、过热等设备状态"
                 : model.printStatus
         }
         if model.printStatus.contains("验证") {
             return model.printStatus
         }
-        return status.detail
+        return AppModel.normalizedPrinterStatus(status.detail)
     }
 
     private var connectionStatusColor: Color {

@@ -725,6 +725,7 @@ private struct EditorInspector: View {
             }
         }
         .formStyle(.grouped)
+        .background(InspectorFocusBridge())
     }
 
     private var selectedIndex: Int? {

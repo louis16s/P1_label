@@ -8,39 +8,40 @@ struct AboutView: View {
     }
 
     var body: some View {
-        VStack(spacing: 14) {
-            if let icon = NSImage(named: "AppIcon") ?? NSApp.applicationIconImage {
-                Image(nsImage: icon)
-                    .resizable()
-                    .scaledToFit()
-                    .frame(width: 96, height: 96)
+        VStack(spacing: 20) {
+            AboutIdentityHeader(version: version)
+
+            VStack(spacing: 0) {
+                AboutDetailRow(title: "作者", value: "louis16s", systemImage: "person.crop.circle")
+                Divider().padding(.leading, 38)
+                AboutDetailRow(
+                    title: "适用系统",
+                    value: "macOS 26 · Apple 芯片",
+                    systemImage: "desktopcomputer"
+                )
             }
-            Text("P1 Label")
-                .font(.title.bold())
-            Text("版本 \(version)")
-                .foregroundStyle(.secondary)
-            Text("德佟 P1 标签设计与打印工具")
-            Divider()
-            LabeledContent("作者", value: "louis16s")
-            LabeledContent("适用系统", value: "macOS 26 · Apple 芯片")
-            LabeledContent("开源协议", value: "MIT")
+            .padding(.horizontal, 14)
+            .background(.quaternary.opacity(0.55), in: RoundedRectangle(cornerRadius: 12))
 
             updateStatus
+                .frame(minHeight: 22)
 
-            HStack {
+            HStack(spacing: 10) {
                 Button("检查更新", systemImage: "arrow.clockwise") {
                     Task { await checkForUpdates(force: true) }
                 }
+                .buttonStyle(.borderedProminent)
                 .disabled(updateState.isChecking)
 
                 Link(
                     "打开项目仓库",
                     destination: URL(string: "https://github.com/louis16s/P1_label")!
                 )
+                .buttonStyle(.bordered)
             }
         }
-        .frame(width: 380)
-        .padding(28)
+        .frame(width: 400)
+        .padding(30)
         .task {
             await checkForUpdates(force: false)
         }
@@ -90,6 +91,54 @@ struct AboutView: View {
         } catch {
             updateState = .failed("暂时无法检查更新，请稍后重试")
         }
+    }
+}
+
+private struct AboutIdentityHeader: View {
+    let version: String
+
+    var body: some View {
+        VStack(spacing: 10) {
+            if let icon = NSImage(named: "AppIcon") ?? NSApp.applicationIconImage {
+                Image(nsImage: icon)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 92, height: 92)
+            }
+
+            VStack(spacing: 5) {
+                Text("P1 Label")
+                    .font(.title.bold())
+                Text("德佟 P1 标签设计与打印工具")
+                    .foregroundStyle(.secondary)
+            }
+
+            Text("版本 \(version)")
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 4)
+                .background(.quaternary, in: Capsule())
+        }
+    }
+}
+
+private struct AboutDetailRow: View {
+    let title: String
+    let value: String
+    let systemImage: String
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: systemImage)
+                .foregroundStyle(.secondary)
+                .frame(width: 18)
+            Text(title)
+            Spacer()
+            Text(value)
+                .foregroundStyle(.secondary)
+        }
+        .padding(.vertical, 11)
     }
 }
 
