@@ -5,6 +5,8 @@ import SwiftUI
 /// inspector. SwiftUI `Form` does not expose a reliable blank-area focus hook
 /// on macOS, so this bridge stays limited to responder-chain coordination.
 struct InspectorFocusBridge: NSViewRepresentable {
+    nonisolated static let monitoredEvents: NSEvent.EventTypeMask = .leftMouseUp
+
     func makeCoordinator() -> Coordinator {
         Coordinator()
     }
@@ -32,7 +34,10 @@ struct InspectorFocusBridge: NSViewRepresentable {
 
         func observeClicks(inside trackingView: TrackingView) {
             stopObserving()
-            eventMonitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) {
+            // Wait until AppKit has completed NSTextView's mouse tracking.
+            // Resigning first responder from a mouse-down monitor can interrupt
+            // TextKit's selection loop and leave the main thread unresponsive.
+            eventMonitor = NSEvent.addLocalMonitorForEvents(matching: InspectorFocusBridge.monitoredEvents) {
                 [weak trackingView] event in
                 let locationInWindow = event.locationInWindow
                 let windowNumber = event.windowNumber

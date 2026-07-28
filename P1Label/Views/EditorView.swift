@@ -798,7 +798,7 @@ private struct TextContentSection: View {
                     Text("系统字体").tag(".AppleSystemUIFont")
                     Divider()
                     ForEach(Self.fontFamilies, id: \.self) { family in
-                        Text(family).font(.custom(family, size: 13)).tag(family)
+                        Text(family).tag(family)
                     }
                 }
                 .pickerStyle(.menu)

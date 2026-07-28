@@ -823,6 +823,11 @@ struct P1ProtocolTests {
         #expect(model.printStatus == "正在扫描…")
     }
 
+    @Test func inspectorFocusDismissalWaitsForMouseUp() {
+        #expect(InspectorFocusBridge.monitoredEvents == .leftMouseUp)
+        #expect(!InspectorFocusBridge.monitoredEvents.contains(.leftMouseDown))
+    }
+
     @MainActor
     @Test func completedPrintReturnsToReadyWithoutOverwritingNewerStatus() async throws {
         let model = AppModel()

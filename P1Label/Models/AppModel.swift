@@ -445,7 +445,12 @@ final class AppModel {
         }
         lastHistoryDate = now
         redoStack.removeAll()
-        updateHistoryState()
+        canUndo = !undoStack.isEmpty
+        canRedo = false
+        // A direct edit is always dirty. Comparing the complete document to
+        // the last saved copy here made every drag and keystroke walk image
+        // payloads on the main thread. Undo/redo still perform the exact check.
+        hasUnsavedChanges = true
         scheduleAutosave()
     }
 
