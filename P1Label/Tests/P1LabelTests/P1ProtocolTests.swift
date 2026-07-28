@@ -829,17 +829,77 @@ struct P1ProtocolTests {
     }
 
     @MainActor
+    @Test func documentPrintPreparationCompletesAsynchronously() async throws {
+        let model = AppModel()
+        model.addTextLayer()
+
+        model.prepareDocumentPrint()
+        await model.waitForPrintPreparation()
+
+        let pending = try #require(model.pendingPrint)
+        #expect(pending.source == .document)
+        #expect(!pending.data.isEmpty)
+        #expect(model.printStatus == "标签已生成，等待确认")
+    }
+
+    @MainActor
+    @Test func cancellingBatchPreparationCannotPublishAStalePrintJob() async throws {
+        let model = AppModel()
+        model.addTextLayer()
+        model.serialCount = 999
+
+        model.prepareBatchPrint()
+        model.cancelPendingPrint()
+        try await Task.sleep(for: .milliseconds(100))
+
+        #expect(model.pendingPrint == nil)
+        #expect(model.printStatus == "已取消打印")
+    }
+
+    @Test func bluetoothTransferTimeoutScalesAndIsBounded() {
+        #expect(BluetoothDiscovery.transferTimeoutMilliseconds(forByteCount: 1) == 15_000)
+        let medium = BluetoothDiscovery.transferTimeoutMilliseconds(forByteCount: 50_000)
+        #expect(medium > 15_000)
+        #expect(medium < 600_000)
+        #expect(
+            BluetoothDiscovery.transferTimeoutMilliseconds(forByteCount: Int.max)
+                == 600_000
+        )
+    }
+
+    @Test func batchPrintSizeIsPreflightedBeforeAllocation() throws {
+        #expect(
+            try PrintJobBuilder.estimatedBatchSize(
+                recordBytes: 12_000,
+                recordCount: 100
+            ) == 1_200_000
+        )
+        #expect(throws: PrintJobBuilderError.self) {
+            try PrintJobBuilder.estimatedBatchSize(
+                recordBytes: PrintJobBuilder.maximumJobBytes,
+                recordCount: 2
+            )
+        }
+        #expect(throws: PrintJobBuilderError.self) {
+            try PrintJobBuilder.estimatedBatchSize(
+                recordBytes: Int.max,
+                recordCount: Int.max
+            )
+        }
+    }
+
+    @MainActor
     @Test func completedPrintReturnsToReadyWithoutOverwritingNewerStatus() async throws {
         let model = AppModel()
 
         model.showPrintCompletedStatus("标签已发送。", resetAfter: .milliseconds(100))
         #expect(model.printStatus == "标签已发送")
-        try await Task.sleep(for: .milliseconds(300))
+        await model.waitForPrintStatusReset()
         #expect(model.printStatus == "已就绪")
 
         model.showPrintCompletedStatus("第二张已发送。", resetAfter: .milliseconds(100))
         model.printStatus = "打印机开盖。"
-        try await Task.sleep(for: .milliseconds(300))
+        await model.waitForPrintStatusReset()
         #expect(model.printStatus == "打印机开盖")
     }
 

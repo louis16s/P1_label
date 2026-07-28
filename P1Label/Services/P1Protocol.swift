@@ -1,6 +1,6 @@
 import Foundation
 
-enum P1PaperMode: Int, CaseIterable, Identifiable, Codable {
+enum P1PaperMode: Int, CaseIterable, Identifiable, Codable, Sendable {
     case continuous = 0
     case gap = 2
     case blackMark = 3

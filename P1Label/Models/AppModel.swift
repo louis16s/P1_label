@@ -73,6 +73,8 @@ final class AppModel {
     @ObservationIgnored private var autosaveTask: Task<Void, Never>?
     @ObservationIgnored private var printerStatusTask: Task<Void, Never>?
     @ObservationIgnored private var printCompletionResetTask: Task<Void, Never>?
+    @ObservationIgnored private var printPreparationTask: Task<Void, Never>?
+    @ObservationIgnored private var printPreparationID: UUID?
     @ObservationIgnored private var isAutomaticallyDiscoveringPrinter = false
     private(set) var canUndo = false
     private(set) var canRedo = false
@@ -539,21 +541,34 @@ final class AppModel {
     }
 
     func prepareDocumentPrint() {
-        do {
-            let raster = try LabelRasterizer.raster(
-                document: document,
-                horizontalOffsetMM: calibrationOffsetX,
-                verticalOffsetMM: calibrationOffsetY
-            )
-            pendingPrint = .init(
-                data: repeatedPrintData(for: raster, copies: printCopies),
-                name: printCopies == 1 ? document.name : "\(document.name) × \(printCopies)",
-                source: .document
-            )
-            printStatus = "标签已生成，等待确认。"
-        } catch {
-            pendingPrint = nil
-            printStatus = error.localizedDescription
+        cancelPrintPreparation()
+        pendingPrint = nil
+        printStatus = "正在生成标签…"
+        let document = document
+        let settings = currentPrintJobSettings
+        let name = printCopies == 1 ? document.name : "\(document.name) × \(printCopies)"
+        let preparationID = UUID()
+        printPreparationID = preparationID
+        printPreparationTask = Task { [weak self] in
+            do {
+                let data = try await PrintJobBuilder.documentData(
+                    document: document,
+                    settings: settings
+                )
+                guard !Task.isCancelled,
+                      let self,
+                      self.printPreparationID == preparationID else { return }
+                pendingPrint = .init(data: data, name: name, source: .document)
+                printStatus = "标签已生成，等待确认"
+                finishPrintPreparation(id: preparationID)
+            } catch is CancellationError {
+                self?.finishPrintPreparation(id: preparationID)
+            } catch {
+                guard let self, self.printPreparationID == preparationID else { return }
+                pendingPrint = nil
+                printStatus = error.localizedDescription
+                finishPrintPreparation(id: preparationID)
+            }
         }
     }
 
@@ -588,48 +603,74 @@ final class AppModel {
             }
         }
 
-        do {
-            var data = Data()
-            for record in records {
-                var renderedDocument = document
-                for index in renderedDocument.layers.indices {
-                    for (key, value) in record {
-                        renderedDocument.layers[index].text = renderedDocument.layers[index].text
-                            .replacingOccurrences(of: "{{\(key)}}", with: value)
-                    }
-                }
-                let raster = try LabelRasterizer.raster(
-                    document: renderedDocument,
-                    horizontalOffsetMM: calibrationOffsetX,
-                    verticalOffsetMM: calibrationOffsetY
+        cancelPrintPreparation()
+        pendingPrint = nil
+        printStatus = "正在生成 \(records.count) 张批量标签…"
+        let document = document
+        let settings = currentPrintJobSettings
+        let preparationID = UUID()
+        printPreparationID = preparationID
+        printPreparationTask = Task { [weak self] in
+            do {
+                let data = try await PrintJobBuilder.batchData(
+                    document: document,
+                    records: records,
+                    settings: settings
                 )
-                data += repeatedPrintData(for: raster, copies: printCopies)
+                guard !Task.isCancelled,
+                      let self,
+                      self.printPreparationID == preparationID else { return }
+                pendingPrint = .init(
+                    data: data,
+                    name: "批量标签 × \(records.count)",
+                    source: .document
+                )
+                printStatus = "已生成 \(records.count) 张批量标签，等待确认"
+                finishPrintPreparation(id: preparationID)
+            } catch is CancellationError {
+                self?.finishPrintPreparation(id: preparationID)
+            } catch {
+                guard let self, self.printPreparationID == preparationID else { return }
+                pendingPrint = nil
+                printStatus = error.localizedDescription
+                finishPrintPreparation(id: preparationID)
             }
-            pendingPrint = .init(
-                data: data,
-                name: "批量标签 × \(records.count)",
-                source: .document
-            )
-            printStatus = "已生成 \(records.count) 张批量标签，等待确认。"
-        } catch {
-            pendingPrint = nil
-            printStatus = error.localizedDescription
         }
     }
 
-    private func repeatedPrintData(for raster: P1Raster, copies: Int) -> Data {
-        let oneJob = P1Protocol.printJob(
-            raster: printInverted ? raster.inverted() : raster,
+    private var currentPrintJobSettings: PrintJobSettings {
+        PrintJobSettings(
+            horizontalOffsetMM: calibrationOffsetX,
+            verticalOffsetMM: calibrationOffsetY,
+            copies: printCopies,
+            inverted: printInverted,
             paperMode: paperMode,
             gapLengthMM: gapLengthMM,
             darkness: printDarkness,
             speed: printSpeed
         )
-        var result = Data()
-        for _ in 0..<max(1, copies) {
-            result += oneJob
-        }
-        return result
+    }
+
+    private func cancelPrintPreparation() {
+        printPreparationID = nil
+        printPreparationTask?.cancel()
+        printPreparationTask = nil
+    }
+
+    private func finishPrintPreparation(id: UUID) {
+        guard printPreparationID == id else { return }
+        printPreparationID = nil
+        printPreparationTask = nil
+    }
+
+    func waitForPrintPreparation() async {
+        let task = printPreparationTask
+        await task?.value
+    }
+
+    private func repeatedPrintData(for raster: P1Raster, copies: Int) -> Data {
+        let settings = currentPrintJobSettings.withCopies(copies)
+        return PrintJobBuilder.repeatedPrintData(for: raster, settings: settings)
     }
 
     func refreshUSBDevices() {
@@ -806,9 +847,11 @@ final class AppModel {
     }
 
     func cancelPendingPrint() {
-        guard pendingPrint != nil else { return }
+        let wasPreparing = printPreparationID != nil
+        cancelPrintPreparation()
+        guard pendingPrint != nil || wasPreparing else { return }
         pendingPrint = nil
-        printStatus = "已取消打印。"
+        printStatus = "已取消打印"
     }
 
     private func formatMillimeters(_ value: Double) -> String {
@@ -831,6 +874,11 @@ final class AppModel {
             guard !Task.isCancelled, let self, self.printStatus == completedStatus else { return }
             self.printStatus = "已就绪"
         }
+    }
+
+    func waitForPrintStatusReset() async {
+        let task = printCompletionResetTask
+        await task?.value
     }
 
     static func normalizedPrinterStatus(_ status: String) -> String {

@@ -1,5 +1,6 @@
 @preconcurrency import CoreBluetooth
 import Foundation
+import OSLog
 
 enum PrinterConnectionState: Equatable {
     case disconnected
@@ -21,6 +22,7 @@ enum PrinterTransportError: LocalizedError {
     case bluetoothNotReady
     case noWritableCharacteristic
     case disconnected
+    case timedOut(String)
     case unsupported(String)
 
     var errorDescription: String? {
@@ -30,6 +32,7 @@ enum PrinterTransportError: LocalizedError {
         case .bluetoothNotReady: "蓝牙打印通道尚未准备好。"
         case .noWritableCharacteristic: "已连接设备，但没有发现可写入的蓝牙打印通道。"
         case .disconnected: "蓝牙打印机已断开连接。"
+        case .timedOut(let operation): "\(operation)超时，请检查打印机后重试。"
         case .unsupported(let message): message
         }
     }
@@ -44,6 +47,7 @@ final class BluetoothDiscovery: NSObject, ObservableObject, CBCentralManagerDele
     private var manager: CBCentralManager?
     private var scanRequested = false
     private var scanTimeout: Task<Void, Never>?
+    private var connectionTimeout: Task<Void, Never>?
     private var nativePeripherals: [UUID: CBPeripheral] = [:]
     private var connectedPeripheral: CBPeripheral?
     private var writeCharacteristic: CBCharacteristic?
@@ -56,9 +60,12 @@ final class BluetoothDiscovery: NSObject, ObservableObject, CBCentralManagerDele
     private var pendingWriteOffset = 0
     private var pendingWriteContinuation: CheckedContinuation<Void, Error>?
     private var pacedWriteTask: Task<Void, Never>?
+    private var writeTimeoutTask: Task<Void, Never>?
     private var statusBuffer = Data()
-    private static let maximumBLEChunkLength = 180
+    private let logger = Logger(subsystem: "com.louis.p1label", category: "Bluetooth")
+    nonisolated private static let maximumBLEChunkLength = 180
     private static let BLEChunkInterval = Duration.milliseconds(33)
+    private static let connectionTimeoutDuration = Duration.seconds(20)
     private static let statusQuery = Data([0x1F, 0x70, 0x00, 0x88, 0x1F, 0x77, 0x00, 0x88])
 
     var isConnected: Bool {
@@ -122,12 +129,19 @@ final class BluetoothDiscovery: NSObject, ObservableObject, CBCentralManagerDele
             case .poweredOn:
                 beginScanIfReady()
             case .poweredOff:
+                connectionTimeout?.cancel()
+                connectionTimeout = nil
+                finishPendingWrite(throwing: PrinterTransportError.disconnected)
                 scanRequested = false
                 state = .failed("请先打开 Mac 蓝牙。")
             case .unauthorized:
+                connectionTimeout?.cancel()
+                connectionTimeout = nil
                 scanRequested = false
                 state = .failed("P1 Label 没有蓝牙权限。")
             case .unsupported:
+                connectionTimeout?.cancel()
+                connectionTimeout = nil
                 scanRequested = false
                 state = .failed("此 Mac 不支持蓝牙低功耗。")
             case .resetting:
@@ -182,10 +196,14 @@ final class BluetoothDiscovery: NSObject, ObservableObject, CBCentralManagerDele
         latestDeviceStatus = nil
         peripheral.delegate = self
         state = .connecting(displayName(for: peripheral))
+        logger.info("Starting Bluetooth connection")
         manager.connect(peripheral, options: nil)
+        scheduleConnectionTimeout(for: peripheral)
     }
 
     func disconnect() {
+        connectionTimeout?.cancel()
+        connectionTimeout = nil
         finishPendingWrite(throwing: PrinterTransportError.disconnected)
         guard let connectedPeripheral else {
             state = .disconnected
@@ -209,6 +227,8 @@ final class BluetoothDiscovery: NSObject, ObservableObject, CBCentralManagerDele
             pendingWriteData = data
             pendingWriteOffset = 0
             pendingWriteContinuation = continuation
+            scheduleWriteTimeout(forByteCount: data.count)
+            logger.debug("Starting Bluetooth transfer: \(data.count, privacy: .public) bytes")
             writeNextChunk()
         }
     }
@@ -236,6 +256,8 @@ final class BluetoothDiscovery: NSObject, ObservableObject, CBCentralManagerDele
         error: Error?
     ) {
         Task { @MainActor [weak self] in
+            self?.connectionTimeout?.cancel()
+            self?.connectionTimeout = nil
             self?.connectedPeripheral = nil
             self?.writeCharacteristic = nil
             self?.notifyCharacteristic = nil
@@ -250,12 +272,21 @@ final class BluetoothDiscovery: NSObject, ObservableObject, CBCentralManagerDele
     ) {
         Task { @MainActor [weak self] in
             guard let self else { return }
+            connectionTimeout?.cancel()
+            connectionTimeout = nil
             finishPendingWrite(throwing: error ?? PrinterTransportError.disconnected)
             connectedPeripheral = nil
             writeCharacteristic = nil
             notifyCharacteristic = nil
             latestDeviceStatus = nil
-            state = error.map { .failed("蓝牙连接已中断：\($0.localizedDescription)") } ?? .disconnected
+            if let error {
+                state = .failed("蓝牙连接已中断：\(error.localizedDescription)")
+            } else if case .failed = state {
+                // Preserve the actionable setup/timeout failure that initiated
+                // this CoreBluetooth cancellation.
+            } else {
+                state = .disconnected
+            }
         }
     }
 
@@ -402,6 +433,9 @@ final class BluetoothDiscovery: NSObject, ObservableObject, CBCentralManagerDele
         writableCandidates.removeAll()
         notifyCandidates.removeAll()
         state = .connected(displayName(for: peripheral))
+        connectionTimeout?.cancel()
+        connectionTimeout = nil
+        logger.info("Bluetooth print channel is ready")
         Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(200))
             _ = try? await self?.requestPrinterStatus()
@@ -410,6 +444,8 @@ final class BluetoothDiscovery: NSObject, ObservableObject, CBCentralManagerDele
 
     private func failSetup(_ reason: String?) {
         let message = reason ?? PrinterTransportError.noWritableCharacteristic.localizedDescription
+        connectionTimeout?.cancel()
+        connectionTimeout = nil
         if let connectedPeripheral {
             manager?.cancelPeripheralConnection(connectedPeripheral)
         }
@@ -417,6 +453,30 @@ final class BluetoothDiscovery: NSObject, ObservableObject, CBCentralManagerDele
         writableCandidates.removeAll()
         notifyCandidates.removeAll()
         state = .failed(message)
+        logger.error("Bluetooth setup failed: \(message, privacy: .public)")
+    }
+
+    private func scheduleConnectionTimeout(for peripheral: CBPeripheral) {
+        connectionTimeout?.cancel()
+        let identifier = peripheral.identifier
+        connectionTimeout = Task { [weak self] in
+            do {
+                try await Task.sleep(for: Self.connectionTimeoutDuration)
+            } catch {
+                return
+            }
+            guard !Task.isCancelled,
+                  let self,
+                  self.connectedPeripheral?.identifier == identifier
+                    || self.nativePeripherals[identifier] != nil,
+                  self.isConnecting else { return }
+            self.manager?.cancelPeripheralConnection(peripheral)
+            self.connectionTimeout = nil
+            self.state = .failed(
+                PrinterTransportError.timedOut("蓝牙连接").localizedDescription
+            )
+            self.logger.error("Bluetooth connection timed out")
+        }
     }
 
     private func writePriority(service: CBService, characteristic: CBCharacteristic) -> Int {
@@ -493,9 +553,43 @@ final class BluetoothDiscovery: NSObject, ObservableObject, CBCentralManagerDele
         }
     }
 
+    nonisolated static func transferTimeoutMilliseconds(forByteCount byteCount: Int) -> Int {
+        let count = max(0, byteCount)
+        let chunkCount = max(
+            1,
+            count / maximumBLEChunkLength
+                + (count.isMultiple(of: maximumBLEChunkLength) ? 0 : 1)
+        )
+        let estimated = chunkCount.multipliedReportingOverflow(by: 132)
+        let withMargin = estimated.partialValue.addingReportingOverflow(5_000)
+        let estimatedMilliseconds = estimated.overflow || withMargin.overflow
+            ? Int.max
+            : withMargin.partialValue
+        return min(600_000, max(15_000, estimatedMilliseconds))
+    }
+
+    private func scheduleWriteTimeout(forByteCount byteCount: Int) {
+        writeTimeoutTask?.cancel()
+        let timeout = Duration.milliseconds(
+            Self.transferTimeoutMilliseconds(forByteCount: byteCount)
+        )
+        writeTimeoutTask = Task { [weak self] in
+            do {
+                try await Task.sleep(for: timeout)
+            } catch {
+                return
+            }
+            guard !Task.isCancelled, let self, self.pendingWriteContinuation != nil else { return }
+            self.logger.error("Bluetooth transfer timed out")
+            self.finishPendingWrite(throwing: PrinterTransportError.timedOut("蓝牙传输"))
+        }
+    }
+
     private func finishPendingWrite(throwing error: Error? = nil) {
         pacedWriteTask?.cancel()
         pacedWriteTask = nil
+        writeTimeoutTask?.cancel()
+        writeTimeoutTask = nil
         let continuation = pendingWriteContinuation
         let transferredByteCount = pendingWriteData?.count ?? 0
         pendingWriteContinuation = nil
@@ -505,6 +599,7 @@ final class BluetoothDiscovery: NSObject, ObservableObject, CBCentralManagerDele
             continuation?.resume(throwing: error)
         } else {
             lastTransferByteCount = transferredByteCount
+            logger.info("Bluetooth transfer completed: \(transferredByteCount, privacy: .public) bytes")
             continuation?.resume()
         }
     }

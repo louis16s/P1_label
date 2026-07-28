@@ -1,6 +1,6 @@
 import Foundation
 
-struct LabelDocument: Identifiable, Codable, Hashable {
+struct LabelDocument: Identifiable, Codable, Hashable, Sendable {
     var id = UUID()
     var name: String
     var paper: PaperSize
@@ -23,7 +23,7 @@ struct LabelDocument: Identifiable, Codable, Hashable {
     )
 }
 
-struct PaperSize: Codable, Hashable {
+struct PaperSize: Codable, Hashable, Sendable {
     var widthMM: Double
     var heightMM: Double
 
@@ -46,13 +46,13 @@ struct PaperSize: Codable, Hashable {
     }
 }
 
-enum LabelTextAlignment: String, Codable, CaseIterable {
+enum LabelTextAlignment: String, Codable, CaseIterable, Sendable {
     case leading
     case center
     case trailing
 }
 
-enum LabelImageScaleMode: String, Codable, CaseIterable {
+enum LabelImageScaleMode: String, Codable, CaseIterable, Sendable {
     case fit
     case fill
 
@@ -64,7 +64,7 @@ enum LabelImageScaleMode: String, Codable, CaseIterable {
     }
 }
 
-enum LabelImageAlgorithm: String, Codable, CaseIterable {
+enum LabelImageAlgorithm: String, Codable, CaseIterable, Sendable {
     case threshold
     case otsu
     case floydSteinberg
@@ -92,7 +92,7 @@ enum LabelImageAlgorithm: String, Codable, CaseIterable {
     }
 }
 
-enum LabelImagePreviewMode: String, Codable, CaseIterable {
+enum LabelImagePreviewMode: String, Codable, CaseIterable, Sendable {
     case color
     case grayscale
     case printResult
@@ -106,8 +106,8 @@ enum LabelImagePreviewMode: String, Codable, CaseIterable {
     }
 }
 
-struct LabelLayer: Identifiable, Codable, Hashable {
-    enum Kind: String, Codable, CaseIterable {
+struct LabelLayer: Identifiable, Codable, Hashable, Sendable {
+    enum Kind: String, Codable, CaseIterable, Sendable {
         case text, image, qrCode, barcode, rectangle, ellipse, line
     }
 

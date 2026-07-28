@@ -45,6 +45,7 @@ enum LabelRasterizer {
         defer { NSGraphicsContext.restoreGraphicsState() }
 
         for layer in document.layers where !layer.isHidden {
+            try Task.checkCancellation()
             draw(
                 layer,
                 in: context,
@@ -59,6 +60,9 @@ enum LabelRasterizer {
 
         var result = P1Raster(width: width, height: height)
         for y in 0..<height {
+            if y.isMultiple(of: 32) {
+                try Task.checkCancellation()
+            }
             for x in 0..<width {
                 let offset = (y * width + x) * 4
                 let luminance = (
