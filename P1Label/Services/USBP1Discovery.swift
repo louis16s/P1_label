@@ -14,6 +14,17 @@ struct P1USBDevice: Identifiable, Equatable, Sendable {
 /// User-space discovery for P1's confirmed USB vendor/product identifiers.
 /// Bulk-pipe claim and writes are intentionally kept separate from discovery.
 enum P1USBDiscovery {
+    static func connectedDevicesAsync() async -> [P1USBDevice] {
+        let worker = Task.detached(priority: .utility) {
+            connectedDevices()
+        }
+        return await withTaskCancellationHandler {
+            await worker.value
+        } onCancel: {
+            worker.cancel()
+        }
+    }
+
     static func connectedDevices() -> [P1USBDevice] {
         guard let matching = IOServiceMatching("IOUSBHostDevice") else {
             return libUSBOnlyFallback()

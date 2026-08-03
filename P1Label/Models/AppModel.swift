@@ -71,6 +71,10 @@ final class AppModel {
     @ObservationIgnored private var lastHistoryDate = Date.distantPast
     @ObservationIgnored private var lastSavedDocument = LabelDocument.blank
     @ObservationIgnored private var autosaveTask: Task<Void, Never>?
+    @ObservationIgnored private var documentOperationTask: Task<Void, Never>?
+    @ObservationIgnored private var documentOperationID: UUID?
+    @ObservationIgnored private var usbDiscoveryTask: Task<Void, Never>?
+    @ObservationIgnored private var usbDiscoveryID: UUID?
     @ObservationIgnored private var printerStatusTask: Task<Void, Never>?
     @ObservationIgnored private var printCompletionResetTask: Task<Void, Never>?
     @ObservationIgnored private var printPreparationTask: Task<Void, Never>?
@@ -151,6 +155,8 @@ final class AppModel {
     }
 
     func newDocument() {
+        cancelDocumentOperation()
+        autosaveTask?.cancel()
         replaceDocumentWithoutHistory(.blank)
         selectedLayerID = nil
         selectedLayerIDs = []
@@ -164,7 +170,7 @@ final class AppModel {
             requestSaveAs()
             return
         }
-        saveDocument(to: currentDocumentURL)
+        saveDocumentInBackground(to: currentDocumentURL)
     }
 
     func requestSaveAs() {
@@ -173,14 +179,14 @@ final class AppModel {
             isExportCopy: false
         ) { [weak self] url in
             guard let self, let url else { return }
-            saveDocument(to: url)
+            saveDocumentInBackground(to: url)
         }
     }
 
     func requestOpenDocument() {
         FilePanelService.chooseLabel { [weak self] url in
             guard let self, let url else { return }
-            openDocument(from: url)
+            openDocumentInBackground(from: url)
         }
     }
 
@@ -190,25 +196,120 @@ final class AppModel {
             isExportCopy: true
         ) { [weak self] url in
             guard let self, let url else { return }
-            exportDocumentCopy(to: url)
+            exportDocumentCopyInBackground(to: url)
         }
     }
 
     func requestImportCSV() {
         FilePanelService.chooseCSV { [weak self] url in
             guard let self, let url else { return }
-            importCSV(from: url)
+            importCSVInBackground(from: url)
         }
     }
 
     func requestImportImage() {
         FilePanelService.chooseImage { [weak self] url in
             guard let self, let url else { return }
-            importImage(from: url)
+            importImageInBackground(from: url)
         }
     }
 
+    private func saveDocumentInBackground(to url: URL) {
+        let snapshot = document
+        startDocumentOperation(failurePrefix: "保存失败") {
+            try await DocumentFileService.writeAsync(snapshot, to: url)
+            return .saved(document: snapshot, url: url)
+        }
+    }
+
+    private func exportDocumentCopyInBackground(to url: URL) {
+        let snapshot = document
+        startDocumentOperation(failurePrefix: "导出失败") {
+            try await DocumentFileService.writeAsync(snapshot, to: url)
+            return .exported(url: url)
+        }
+    }
+
+    private func openDocumentInBackground(from url: URL) {
+        startDocumentOperation(failurePrefix: "打开失败") {
+            .opened(document: try await DocumentFileService.readDocumentAsync(from: url), url: url)
+        }
+    }
+
+    private func importCSVInBackground(from url: URL) {
+        startDocumentOperation(failurePrefix: "CSV 导入失败") {
+            .importedCSV(try await DocumentFileService.readCSVRecordsAsync(from: url))
+        }
+    }
+
+    private func importImageInBackground(from url: URL) {
+        let name = url.deletingPathExtension().lastPathComponent
+        startDocumentOperation(failurePrefix: "导入图片失败") {
+            .importedImage(
+                try await DocumentFileService.readImageAsync(from: url),
+                name: name
+            )
+        }
+    }
+
+    private func startDocumentOperation(
+        failurePrefix: String,
+        operation: @escaping @Sendable () async throws -> DocumentOperationResult
+    ) {
+        cancelDocumentOperation()
+        autosaveTask?.cancel()
+        let operationID = UUID()
+        documentOperationID = operationID
+        documentOperationTask = Task { [weak self] in
+            do {
+                let result = try await operation()
+                guard !Task.isCancelled,
+                      let self,
+                      self.documentOperationID == operationID else { return }
+                self.applyDocumentOperationResult(result)
+                self.finishDocumentOperation(id: operationID)
+            } catch is CancellationError {
+                self?.finishDocumentOperation(id: operationID)
+            } catch {
+                guard let self, self.documentOperationID == operationID else { return }
+                self.printStatus = "\(failurePrefix)：\(error.localizedDescription)"
+                self.finishDocumentOperation(id: operationID)
+            }
+        }
+    }
+
+    private func applyDocumentOperationResult(_ result: DocumentOperationResult) {
+        switch result {
+        case let .saved(snapshot, url):
+            currentDocumentURL = url
+            markSavedSnapshot(snapshot)
+            printStatus = "已保存“\(url.lastPathComponent)”"
+        case let .exported(url):
+            printStatus = "已导出标签副本“\(url.lastPathComponent)”"
+        case let .opened(opened, url):
+            loadDocument(opened, from: url)
+        case let .importedCSV(records):
+            batchRecords = records
+            printStatus = "已载入 \(records.count) 条批量数据"
+        case let .importedImage(imported, name):
+            addImageLayer(data: imported.data, name: name, aspectRatio: imported.aspectRatio)
+        }
+    }
+
+    private func cancelDocumentOperation() {
+        documentOperationID = nil
+        documentOperationTask?.cancel()
+        documentOperationTask = nil
+    }
+
+    private func finishDocumentOperation(id: UUID) {
+        guard documentOperationID == id else { return }
+        documentOperationID = nil
+        documentOperationTask = nil
+    }
+
     func loadDocument(_ document: LabelDocument, from url: URL) {
+        autosaveTask?.cancel()
         replaceDocumentWithoutHistory(document)
         selectedLayerID = document.layers.last?.id
         selectedLayerIDs = Set(selectedLayerID.map { [$0] } ?? [])
@@ -220,9 +321,7 @@ final class AppModel {
     @discardableResult
     func saveDocument(to url: URL) -> Bool {
         do {
-            try withSecurityScopedAccess(to: url) {
-                try encodedDocument().write(to: url, options: .atomic)
-            }
+            try DocumentFileService.write(document, to: url)
             currentDocumentURL = url
             markCurrentDocumentSaved()
             printStatus = "已保存“\(url.lastPathComponent)”"
@@ -236,9 +335,7 @@ final class AppModel {
     @discardableResult
     func exportDocumentCopy(to url: URL) -> Bool {
         do {
-            try withSecurityScopedAccess(to: url) {
-                try encodedDocument().write(to: url, options: .atomic)
-            }
+            try DocumentFileService.write(document, to: url)
             printStatus = "已导出标签副本“\(url.lastPathComponent)”"
             return true
         } catch {
@@ -250,10 +347,7 @@ final class AppModel {
     @discardableResult
     func openDocument(from url: URL) -> Bool {
         do {
-            let data = try withSecurityScopedAccess(to: url) {
-                try Data(contentsOf: url)
-            }
-            let opened = try JSONDecoder().decode(LabelDocument.self, from: data)
+            let opened = try DocumentFileService.readDocument(from: url)
             loadDocument(opened, from: url)
             return true
         } catch {
@@ -265,10 +359,9 @@ final class AppModel {
     @discardableResult
     func importCSV(from url: URL) -> Bool {
         do {
-            let data = try withSecurityScopedAccess(to: url) {
-                try Data(contentsOf: url)
-            }
-            return loadBatchCSV(data)
+            batchRecords = try DocumentFileService.readCSVRecords(from: url)
+            printStatus = "已载入 \(batchRecords.count) 条批量数据"
+            return true
         } catch {
             printStatus = "CSV 导入失败：\(error.localizedDescription)"
             return false
@@ -278,33 +371,17 @@ final class AppModel {
     @discardableResult
     func importImage(from url: URL) -> Bool {
         do {
-            let data = try withSecurityScopedAccess(to: url) {
-                try Data(contentsOf: url)
-            }
-            try addImageLayer(
-                data: data,
-                name: url.deletingPathExtension().lastPathComponent
+            let imported = try DocumentFileService.readImage(from: url)
+            addImageLayer(
+                data: imported.data,
+                name: url.deletingPathExtension().lastPathComponent,
+                aspectRatio: imported.aspectRatio
             )
             return true
         } catch {
             printStatus = "导入图片失败：\(error.localizedDescription)"
             return false
         }
-    }
-
-    private func encodedDocument() throws -> Data {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        return try encoder.encode(document)
-    }
-
-    private func withSecurityScopedAccess<T>(
-        to url: URL,
-        operation: () throws -> T
-    ) rethrows -> T {
-        let accessed = url.startAccessingSecurityScopedResource()
-        defer { if accessed { url.stopAccessingSecurityScopedResource() } }
-        return try operation()
     }
 
     func addTextLayer() {
@@ -324,8 +401,12 @@ final class AppModel {
 
     func addImageLayer(data: Data, name: String) throws {
         guard let aspectRatio = LabelImageProcessor.sourceAspectRatio(data: data) else {
-            throw AppModelError.invalidImage
+            throw DocumentFileError.invalidImage
         }
+        addImageLayer(data: data, name: name, aspectRatio: aspectRatio)
+    }
+
+    private func addImageLayer(data: Data, name: String, aspectRatio: Double) {
         let layer = LabelLayer.image(
             data,
             name: name,
@@ -491,14 +572,34 @@ final class AppModel {
         hasUnsavedChanges = false
     }
 
+    private func markSavedSnapshot(_ snapshot: LabelDocument) {
+        lastSavedDocument = snapshot
+        hasUnsavedChanges = document != snapshot
+    }
+
     private func scheduleAutosave() {
         autosaveTask?.cancel()
         guard currentDocumentURL != nil else { return }
         autosaveTask = Task { [weak self] in
             try? await Task.sleep(for: .seconds(1))
             guard !Task.isCancelled, let self, let url = self.currentDocumentURL else { return }
-            self.saveDocument(to: url)
+            let snapshot = self.document
+            do {
+                try await DocumentFileService.writeAsync(snapshot, to: url)
+                guard !Task.isCancelled, self.currentDocumentURL == url else { return }
+                self.markSavedSnapshot(snapshot)
+            } catch is CancellationError {
+                return
+            } catch {
+                // Autosave is intentionally silent: an incidental disk error must not
+                // replace printer faults or print progress in the shared status area.
+            }
         }
+    }
+
+    func waitForAutosave() async {
+        let task = autosaveTask
+        await task?.value
     }
 
     func prepareTestPrint() {
@@ -674,8 +775,26 @@ final class AppModel {
     }
 
     func refreshUSBDevices() {
-        usbDevices = P1USBDiscovery.connectedDevices()
-        guard !usbDevices.isEmpty else {
+        usbDiscoveryTask?.cancel()
+        let discoveryID = UUID()
+        usbDiscoveryID = discoveryID
+        usbDiscoveryTask = Task { [weak self] in
+            let devices = await P1USBDiscovery.connectedDevicesAsync()
+            guard !Task.isCancelled,
+                  let self,
+                  self.usbDiscoveryID == discoveryID else { return }
+            self.applyDiscoveredUSBDevices(devices)
+            self.usbDiscoveryID = nil
+            self.usbDiscoveryTask = nil
+            if !devices.isEmpty {
+                self.refreshPrinterStatus()
+            }
+        }
+    }
+
+    private func applyDiscoveredUSBDevices(_ devices: [P1USBDevice]) {
+        usbDevices = devices
+        guard !devices.isEmpty else {
             printerPortStatus = nil
             deviceStatus = nil
             printStatus = "未检测到德佟 P1，请检查 USB 连接。"
@@ -697,7 +816,9 @@ final class AppModel {
         let clock = ContinuousClock()
         let deadline = clock.now.advanced(by: maximumDuration)
         while !Task.isCancelled, clock.now < deadline, !hasConnectedPrinter {
-            refreshUSBDevices()
+            let devices = await P1USBDiscovery.connectedDevicesAsync()
+            guard !Task.isCancelled else { return }
+            applyDiscoveredUSBDevices(devices)
             if hasConnectedPrinter {
                 refreshPrinterStatus()
                 return
@@ -896,16 +1017,16 @@ private extension NSPasteboard.PasteboardType {
     static let p1LabelLayers = NSPasteboard.PasteboardType("com.louis.p1label.layers")
 }
 
-private enum AppModelError: LocalizedError {
-    case invalidImage
-
-    var errorDescription: String? {
-        "无法读取该图片。请使用 PNG、JPEG、HEIC、TIFF、GIF 或 PDF 图片。"
-    }
-}
-
 enum LayerAlignment {
     case left, horizontalCenter, right, top, verticalCenter, bottom
+}
+
+private enum DocumentOperationResult: Sendable {
+    case saved(document: LabelDocument, url: URL)
+    case exported(url: URL)
+    case opened(document: LabelDocument, url: URL)
+    case importedCSV([[String: String]])
+    case importedImage(DocumentFileService.ImportedImage, name: String)
 }
 
 struct PendingPrint: Identifiable, Sendable {

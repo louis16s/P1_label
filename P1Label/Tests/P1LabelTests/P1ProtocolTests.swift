@@ -755,6 +755,52 @@ struct P1ProtocolTests {
         #expect(reopened.printStatus.contains("打开失败"))
     }
 
+    @Test func asynchronousDocumentServiceRoundTripsAndRejectsInvalidGeometry() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("P1LabelAsyncTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let url = directory.appendingPathComponent("后台读写.p1label.json")
+        var document = LabelDocument.blank
+        document.name = "后台读写"
+        document.layers = [.text("不会阻塞主线程", x: 2, y: 2, fontSizeMM: 3)]
+        try await DocumentFileService.writeAsync(document, to: url)
+        let reopened = try await DocumentFileService.readDocumentAsync(from: url)
+        #expect(reopened == document)
+
+        document.paper.widthMM = -1
+        #expect(throws: DocumentFileError.self) {
+            try DocumentFileService.write(document, to: url)
+        }
+    }
+
+    @MainActor
+    @Test func autosavePersistsQuietlyWithoutReplacingPrinterStatus() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("P1LabelAutosaveTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let url = directory.appendingPathComponent("自动保存.p1label.json")
+        let model = AppModel()
+        #expect(model.saveDocument(to: url))
+        model.document.name = "自动保存后的名称"
+        model.printStatus = "打印机开盖"
+        await model.waitForAutosave()
+
+        #expect(model.printStatus == "打印机开盖")
+        #expect(!model.hasUnsavedChanges)
+        let reopened = try DocumentFileService.readDocument(from: url)
+        #expect(reopened.name == "自动保存后的名称")
+    }
+
     @MainActor
     @Test func printConfirmationOnlyMentionsNonZeroOffsets() throws {
         let suiteName = "P1LabelTests.\(UUID().uuidString)"
