@@ -10,8 +10,15 @@ struct P1LabelCommands: Commands {
         }
 
         CommandGroup(replacing: .newItem) {
-            Button("新建标签") { model.newDocument() }
+            Button("新建标签") { model.requestNewDocument() }
                 .keyboardShortcut("n")
+            Menu("从模板新建") {
+                ForEach(DocumentTemplate.allCases) { template in
+                    Button(template.displayName, systemImage: template.systemImage) {
+                        model.requestTemplate(template)
+                    }
+                }
+            }
             Button("打开标签…") { model.requestOpenDocument() }
                 .keyboardShortcut("o")
             Divider()
@@ -109,6 +116,8 @@ struct P1LabelCommands: Commands {
             Button("扫描蓝牙打印机") { model.bluetoothPrinter.startScan() }
             Button("读取打印机状态") { model.refreshPrinterStatus() }
                 .disabled(!model.hasConnectedPrinter)
+            Button("打印历史…") { openWindow(id: "print-history") }
+            Button("导出脱敏诊断报告…") { model.requestExportDiagnosticReport() }
             Divider()
             Button("校准标签间隙…") {
                 openWindow(id: "printer")

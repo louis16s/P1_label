@@ -62,6 +62,20 @@ enum FilePanelService {
         present(panel, completion: completion)
     }
 
+    static func chooseDiagnosticReportLocation(
+        completion: @escaping @MainActor (URL?) -> Void
+    ) {
+        let panel = NSSavePanel()
+        panel.title = "导出脱敏诊断报告"
+        panel.prompt = "导出"
+        panel.message = "报告不包含标签内容、文件路径、设备标识或打印数据"
+        panel.allowedContentTypes = [.plainText]
+        panel.nameFieldStringValue = "P1-Label-诊断报告.txt"
+        panel.canCreateDirectories = true
+        panel.isExtensionHidden = false
+        present(panel, completion: completion)
+    }
+
     private static func openPanel(
         title: String,
         message: String,

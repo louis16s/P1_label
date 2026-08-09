@@ -5,6 +5,7 @@ struct EditorInspector: View {
     @Bindable var model: AppModel
     @AppStorage("nudgeStep") private var nudgeStep = 0.1
     @AppStorage("snapToGrid") private var snapToGrid = true
+    @AppStorage("snapToObjects") private var snapToObjects = true
     @State private var isPrintOffsetExpanded = false
     @State private var isBatchExpanded = false
 
@@ -44,6 +45,7 @@ struct EditorInspector: View {
                     }
                     .pickerStyle(.segmented)
                     Toggle("拖动时吸附 0.5 mm 网格", isOn: $snapToGrid)
+                    Toggle("吸附纸边、中心与其他元素", isOn: $snapToObjects)
                     HStack(spacing: 5) {
                         alignmentButton("align.horizontal.left", "左对齐", .left)
                         alignmentButton("align.horizontal.center", "水平居中", .horizontalCenter)

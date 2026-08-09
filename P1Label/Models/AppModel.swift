@@ -26,6 +26,7 @@ final class AppModel {
     var serialCount = 10
     var currentDocumentURL: URL?
     var pendingPrint: PendingPrint?
+    private(set) var pendingDocumentAction: PendingDocumentAction?
     var paperMode: P1PaperMode {
         didSet { preferences.set(paperMode.rawValue, forKey: "paperMode") }
     }
@@ -79,7 +80,9 @@ final class AppModel {
         }
     }
     let bluetoothPrinter = BluetoothPrinterController()
+    let printHistory: PrintHistoryStore
     private let usbTransport = P1USBTransport()
+    private let documentFiles = DocumentFileAccess()
     private let preferences: UserDefaults
     @ObservationIgnored private var history = DocumentHistory(savedDocument: .blank)
     @ObservationIgnored private var suppressHistory = false
@@ -93,6 +96,10 @@ final class AppModel {
     @ObservationIgnored private var printPreparationTask: Task<Void, Never>?
     @ObservationIgnored private var printPreparationID: UUID?
     @ObservationIgnored private var printSendingTask: Task<Void, Never>?
+    @ObservationIgnored private var activePrintHistoryID: UUID?
+    @ObservationIgnored private var terminationCompletion: ((Bool) -> Void)?
+    @ObservationIgnored private var terminationWaitTask: Task<Void, Never>?
+    @ObservationIgnored private var diagnosticExportTask: Task<Void, Never>?
     @ObservationIgnored private var isAutomaticallyDiscoveringPrinter = false
     private(set) var canUndo = false
     private(set) var canRedo = false
@@ -101,6 +108,7 @@ final class AppModel {
 
     init(preferences: UserDefaults = .standard) {
         self.preferences = preferences
+        printHistory = PrintHistoryStore(preferences: preferences)
         calibrationOffsetX = Self.normalizedCalibrationOffset(
             preferences.double(forKey: "printOffsetX")
         )
@@ -153,15 +161,20 @@ final class AppModel {
     }
 
     var canAlignSelection: Bool {
-        !selectedLayerIDs.isEmpty && !selectedLayerIsLocked
+        hasSelection && !selectedLayerIsLocked
     }
 
     var hasSelection: Bool {
         !effectiveSelectedLayerIDs.isEmpty
     }
 
+    var requiresTerminationCoordination: Bool {
+        hasUnsavedChanges || isSendingPrint
+    }
+
     private var selectedLayers: [LabelLayer] {
-        document.layers.filter { effectiveSelectedLayerIDs.contains($0.id) }
+        let selectedIDs = effectiveSelectedLayerIDs
+        return document.layers.filter { selectedIDs.contains($0.id) }
     }
 
     private var effectiveSelectedLayerIDs: Set<UUID> {
@@ -169,16 +182,24 @@ final class AppModel {
         return Set(selectedLayerID.map { [$0] } ?? [])
     }
 
-    func newDocument() {
+    func requestNewDocument() {
+        requestDocumentAction(.newDocument(.blank))
+    }
+
+    func requestTemplate(_ template: DocumentTemplate) {
+        requestDocumentAction(.newDocument(template))
+    }
+
+    private func performNewDocument(_ template: DocumentTemplate) {
         cancelDocumentOperation()
         autosaveTask?.cancel()
         LabelPreviewCache.shared.removeAll()
-        replaceDocumentWithoutHistory(.blank)
+        replaceDocumentWithoutHistory(template.makeDocument())
         selectedLayerID = nil
         selectedLayerIDs = []
         currentDocumentURL = nil
         resetHistory()
-        printStatus = "已新建标签"
+        printStatus = template == .blank ? "已新建标签" : "已从“\(template.displayName)”新建标签"
     }
 
     func requestSave() {
@@ -202,8 +223,104 @@ final class AppModel {
     func requestOpenDocument() {
         FilePanelService.chooseLabel { [weak self] url in
             guard let self, let url else { return }
-            openDocument(from: url)
+            requestDocumentAction(.open(url))
         }
+    }
+
+    func requestApplicationTermination(completion: @escaping (Bool) -> Void) {
+        terminationCompletion = completion
+        if isSendingPrint {
+            if let activePrintHistoryID {
+                cancelPrintJob(activePrintHistoryID)
+            }
+            let sendingTask = printSendingTask
+            terminationWaitTask?.cancel()
+            terminationWaitTask = Task { [weak self] in
+                await sendingTask?.value
+                guard !Task.isCancelled, let self else { return }
+                self.terminationWaitTask = nil
+                self.continueApplicationTermination()
+            }
+            return
+        }
+        continueApplicationTermination()
+    }
+
+    private func continueApplicationTermination() {
+        if pendingPrint != nil {
+            cancelPendingPrint()
+        }
+        guard hasUnsavedChanges else {
+            finishTermination(allowing: true)
+            return
+        }
+        pendingDocumentAction = .terminate
+        NSApp?.activate(ignoringOtherApps: true)
+    }
+
+    func resolveUnsavedChanges(_ decision: UnsavedChangesDecision) {
+        guard let action = pendingDocumentAction else { return }
+        pendingDocumentAction = nil
+        switch decision {
+        case .discard:
+            performDocumentAction(action)
+        case .cancel:
+            cancelDocumentAction(action)
+        case .save:
+            Task { [weak self] in
+                await Task.yield()
+                self?.saveBeforePerforming(action)
+            }
+        }
+    }
+
+    private func requestDocumentAction(_ action: PendingDocumentAction) {
+        guard hasUnsavedChanges else {
+            performDocumentAction(action)
+            return
+        }
+        pendingDocumentAction = action
+    }
+
+    private func saveBeforePerforming(_ action: PendingDocumentAction) {
+        if let currentDocumentURL {
+            saveDocument(to: currentDocumentURL, continuingWith: action)
+            return
+        }
+        FilePanelService.chooseSaveLocation(
+            defaultName: document.name,
+            isExportCopy: false
+        ) { [weak self] url in
+            guard let self else { return }
+            guard let url else {
+                cancelDocumentAction(action)
+                return
+            }
+            saveDocument(to: url, continuingWith: action)
+        }
+    }
+
+    private func performDocumentAction(_ action: PendingDocumentAction) {
+        switch action {
+        case .newDocument(let template):
+            performNewDocument(template)
+        case .open(let url):
+            openDocument(from: url)
+        case .terminate:
+            finishTermination(allowing: true)
+        }
+    }
+
+    private func cancelDocumentAction(_ action: PendingDocumentAction) {
+        if action == .terminate {
+            finishTermination(allowing: false)
+        }
+    }
+
+    private func finishTermination(allowing termination: Bool) {
+        let completion = terminationCompletion
+        terminationCompletion = nil
+        completion?(termination)
     }
 
     func requestExportCopy() {
@@ -230,39 +347,50 @@ final class AppModel {
         }
     }
 
-    func saveDocument(to url: URL) {
+    func saveDocument(
+        to url: URL,
+        continuingWith action: PendingDocumentAction? = nil
+    ) {
         let snapshot = document
-        startDocumentOperation(failurePrefix: "保存失败") {
-            try await DocumentFileService.writeAsync(snapshot, to: url)
-            return .saved(document: snapshot, url: url)
+        let files = documentFiles
+        startDocumentOperation(
+            failurePrefix: "保存失败",
+            cancellingActionOnFailure: action
+        ) {
+            try await files.write(snapshot, to: url)
+            return .saved(document: snapshot, url: url, continuingWith: action)
         }
     }
 
     func exportDocumentCopy(to url: URL) {
         let snapshot = document
+        let files = documentFiles
         startDocumentOperation(failurePrefix: "导出失败") {
-            try await DocumentFileService.writeAsync(snapshot, to: url)
+            try await files.write(snapshot, to: url)
             return .exported(url: url)
         }
     }
 
     func openDocument(from url: URL) {
+        let files = documentFiles
         startDocumentOperation(failurePrefix: "打开失败") {
-            .opened(document: try await DocumentFileService.readDocumentAsync(from: url), url: url)
+            .opened(document: try await files.readDocument(from: url), url: url)
         }
     }
 
     func importCSV(from url: URL) {
+        let files = documentFiles
         startDocumentOperation(failurePrefix: "CSV 导入失败") {
-            .importedCSV(try await DocumentFileService.readCSVRecordsAsync(from: url))
+            .importedCSV(try await files.readCSV(from: url))
         }
     }
 
     func importImage(from url: URL) {
         let name = url.deletingPathExtension().lastPathComponent
+        let files = documentFiles
         startDocumentOperation(failurePrefix: "导入图片失败") {
             .importedImage(
-                try await DocumentFileService.readImageAsync(from: url),
+                try await files.readImage(from: url),
                 name: name
             )
         }
@@ -270,6 +398,7 @@ final class AppModel {
 
     private func startDocumentOperation(
         failurePrefix: String,
+        cancellingActionOnFailure action: PendingDocumentAction? = nil,
         operation: @escaping @Sendable () async throws -> DocumentOperationResult
     ) {
         cancelDocumentOperation()
@@ -279,16 +408,28 @@ final class AppModel {
         documentOperationTask = Task { [weak self] in
             do {
                 let result = try await operation()
+                guard let self else { return }
                 guard !Task.isCancelled,
-                      let self,
-                      self.documentOperationID == operationID else { return }
+                      self.documentOperationID == operationID else {
+                    if let action {
+                        self.cancelDocumentAction(action)
+                    }
+                    self.finishDocumentOperation(id: operationID)
+                    return
+                }
                 self.applyDocumentOperationResult(result)
                 self.finishDocumentOperation(id: operationID)
             } catch is CancellationError {
+                if let action {
+                    self?.cancelDocumentAction(action)
+                }
                 self?.finishDocumentOperation(id: operationID)
             } catch {
                 guard let self, self.documentOperationID == operationID else { return }
                 self.printStatus = "\(failurePrefix)：\(error.localizedDescription)"
+                if let action {
+                    self.cancelDocumentAction(action)
+                }
                 self.finishDocumentOperation(id: operationID)
             }
         }
@@ -296,10 +437,17 @@ final class AppModel {
 
     private func applyDocumentOperationResult(_ result: DocumentOperationResult) {
         switch result {
-        case let .saved(snapshot, url):
+        case let .saved(snapshot, url, action):
             currentDocumentURL = url
             markSavedSnapshot(snapshot)
             printStatus = "已保存“\(url.lastPathComponent)”"
+            if let action {
+                if document == snapshot {
+                    performDocumentAction(action)
+                } else {
+                    pendingDocumentAction = action
+                }
+            }
         case let .exported(url):
             printStatus = "已导出标签副本“\(url.lastPathComponent)”"
         case let .opened(opened, url):
@@ -448,9 +596,11 @@ final class AppModel {
         let shouldLock = document.layers
             .filter { targetIDs.contains($0.id) }
             .contains { !$0.isLocked }
-        for index in document.layers.indices where targetIDs.contains(document.layers[index].id) {
-            document.layers[index].isLocked = shouldLock
+        var layers = document.layers
+        for index in layers.indices where targetIDs.contains(layers[index].id) {
+            layers[index].isLocked = shouldLock
         }
+        document.layers = layers
     }
 
     func undo() {
@@ -519,7 +669,7 @@ final class AppModel {
             guard !Task.isCancelled, let self, let url = self.currentDocumentURL else { return }
             let snapshot = self.document
             do {
-                try await DocumentFileService.writeAsync(snapshot, to: url)
+                try await self.documentFiles.write(snapshot, to: url)
                 guard !Task.isCancelled, self.currentDocumentURL == url else { return }
                 self.markSavedSnapshot(snapshot)
             } catch is CancellationError {
@@ -809,54 +959,73 @@ final class AppModel {
     }
 
     func nudgeSelectedLayer(dx: Double, dy: Double) {
-        for index in document.layers.indices
-        where effectiveSelectedLayerIDs.contains(document.layers[index].id) && !document.layers[index].isLocked {
-            document.layers[index].x = min(
-                max(0, document.layers[index].x + dx),
-                max(0, document.paper.widthMM - document.layers[index].width)
+        let selectedIDs = effectiveSelectedLayerIDs
+        var layers = document.layers
+        var changed = false
+        for index in layers.indices
+        where selectedIDs.contains(layers[index].id) && !layers[index].isLocked {
+            let original = layers[index]
+            layers[index].x = min(
+                max(0, layers[index].x + dx),
+                max(0, document.paper.widthMM - layers[index].width)
             )
-            document.layers[index].y = min(
-                max(0, document.layers[index].y + dy),
-                max(0, document.paper.heightMM - document.layers[index].height)
+            layers[index].y = min(
+                max(0, layers[index].y + dy),
+                max(0, document.paper.heightMM - layers[index].height)
             )
+            changed = changed || layers[index] != original
+        }
+        if changed {
+            document.layers = layers
         }
     }
 
     func alignSelection(_ alignment: LayerAlignment) {
-        let indices = document.layers.indices.filter {
-            effectiveSelectedLayerIDs.contains(document.layers[$0].id) && !document.layers[$0].isLocked
+        let selectedIDs = effectiveSelectedLayerIDs
+        var layers = document.layers
+        var changed = false
+        let indices = layers.indices.filter {
+            selectedIDs.contains(layers[$0].id) && !layers[$0].isLocked
         }
         guard !indices.isEmpty else { return }
-        let minX = indices.map { document.layers[$0].x }.min() ?? 0
-        let maxX = indices.map { document.layers[$0].x + document.layers[$0].width }.max() ?? document.paper.widthMM
-        let minY = indices.map { document.layers[$0].y }.min() ?? 0
-        let maxY = indices.map { document.layers[$0].y + document.layers[$0].height }.max() ?? document.paper.heightMM
+        let minX = indices.map { layers[$0].x }.min() ?? 0
+        let maxX = indices.map { layers[$0].x + layers[$0].width }.max() ?? document.paper.widthMM
+        let minY = indices.map { layers[$0].y }.min() ?? 0
+        let maxY = indices.map { layers[$0].y + layers[$0].height }.max() ?? document.paper.heightMM
 
         for index in indices {
+            let original = layers[index]
             switch alignment {
             case .left:
-                document.layers[index].x = indices.count == 1 ? 0 : minX
+                layers[index].x = indices.count == 1 ? 0 : minX
             case .horizontalCenter:
                 let center = indices.count == 1 ? document.paper.widthMM / 2 : (minX + maxX) / 2
-                document.layers[index].x = center - document.layers[index].width / 2
+                layers[index].x = center - layers[index].width / 2
             case .right:
                 let edge = indices.count == 1 ? document.paper.widthMM : maxX
-                document.layers[index].x = edge - document.layers[index].width
+                layers[index].x = edge - layers[index].width
             case .top:
-                document.layers[index].y = indices.count == 1 ? 0 : minY
+                layers[index].y = indices.count == 1 ? 0 : minY
             case .verticalCenter:
                 let center = indices.count == 1 ? document.paper.heightMM / 2 : (minY + maxY) / 2
-                document.layers[index].y = center - document.layers[index].height / 2
+                layers[index].y = center - layers[index].height / 2
             case .bottom:
                 let edge = indices.count == 1 ? document.paper.heightMM : maxY
-                document.layers[index].y = edge - document.layers[index].height
+                layers[index].y = edge - layers[index].height
             }
+            changed = changed || layers[index] != original
+        }
+        if changed {
+            document.layers = layers
         }
     }
 
     func confirmPendingPrint() {
         guard let pendingPrint, !isSendingPrint else { return }
         self.pendingPrint = nil
+        let connectionName = activePrintConnectionName
+        let historyID = printHistory.begin(pendingPrint, connection: connectionName)
+        activePrintHistoryID = historyID
         let precedingStatusTask = printerStatusTask
         printerStatusTask?.cancel()
         printerStatusTask = nil
@@ -866,6 +1035,9 @@ final class AppModel {
             defer {
                 isSendingPrint = false
                 printSendingTask = nil
+                if activePrintHistoryID == historyID {
+                    activePrintHistoryID = nil
+                }
             }
             do {
                 await precedingStatusTask?.value
@@ -876,9 +1048,12 @@ final class AppModel {
                         deviceStatus = status
                         printStatus = "\(status.title)：\(status.detail)"
                         self.pendingPrint = pendingPrint
+                        printHistory.markFailed(historyID, message: printStatus)
                         return
                     }
                     try await bluetoothPrinter.send(pendingPrint.data)
+                    try Task.checkCancellation()
+                    printHistory.markSucceeded(historyID)
                     showPrintCompletedStatus(
                         "“\(pendingPrint.name)”已通过\(activePrintConnectionName)发送 \(bluetoothPrinter.lastTransferByteCount) 字节"
                     )
@@ -891,13 +1066,19 @@ final class AppModel {
                     }
                 } else {
                     try await usbTransport.send(pendingPrint.data)
+                    try Task.checkCancellation()
+                    printHistory.markSucceeded(historyID)
                     showPrintCompletedStatus(
                         "“\(pendingPrint.name)”已通过\(activePrintConnectionName)发送"
                     )
                 }
+            } catch is CancellationError {
+                printHistory.markCancelled(historyID, detail: "用户取消了任务")
+                printStatus = "已取消打印任务"
             } catch {
                 printStatus = error.localizedDescription
                 self.pendingPrint = pendingPrint
+                printHistory.markFailed(historyID, message: error.localizedDescription)
             }
         }
     }
@@ -913,6 +1094,63 @@ final class AppModel {
         guard pendingPrint != nil || wasPreparing else { return }
         pendingPrint = nil
         printStatus = "已取消打印"
+    }
+
+    func retryPrint(_ historyID: UUID) {
+        guard !isSendingPrint else {
+            printStatus = "当前打印任务完成后才能重试"
+            return
+        }
+        guard let job = printHistory.retryJob(historyID) else {
+            printStatus = "此历史任务的打印数据已释放，请重新生成标签"
+            return
+        }
+        pendingPrint = PendingPrint(data: job.data, name: job.name, source: .history)
+        printStatus = "“\(job.name)”已准备重新打印，等待确认"
+    }
+
+    func cancelPrintJob(_ historyID: UUID) {
+        guard activePrintHistoryID == historyID else { return }
+        printHistory.markCancelled(historyID, detail: "用户请求取消")
+        printSendingTask?.cancel()
+        bluetoothPrinter.cancelCurrentTransfer()
+        printStatus = bluetoothPrinter.isConnected
+            ? "正在取消蓝牙打印任务"
+            : "已请求取消；USB 数据若已发送到设备则无法撤回"
+    }
+
+    func requestExportDiagnosticReport() {
+        FilePanelService.chooseDiagnosticReportLocation { [weak self] url in
+            guard let self, let url else { return }
+            exportDiagnosticReport(to: url)
+        }
+    }
+
+    func exportDiagnosticReport(to url: URL) {
+        diagnosticExportTask?.cancel()
+        let snapshot = DiagnosticSnapshot(
+            generatedAt: Date(),
+            appVersion: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "开发版",
+            appBuild: Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "-",
+            operatingSystem: ProcessInfo.processInfo.operatingSystemVersionString,
+            architecture: Self.runtimeArchitecture,
+            connectionKind: bluetoothPrinter.isConnected ? "蓝牙" : (usbDevices.isEmpty ? "未连接" : "USB"),
+            usbDeviceCount: usbDevices.count,
+            bluetoothState: bluetoothPrinter.isConnected ? "已连接" : "未连接",
+            deviceStatus: deviceStatus,
+            recentPrintStates: Array(printHistory.entries.prefix(20).map(\.status))
+        )
+        diagnosticExportTask = Task { [weak self] in
+            do {
+                try await DiagnosticReportService.write(snapshot, to: url)
+                guard !Task.isCancelled else { return }
+                self?.printStatus = "已导出脱敏诊断报告“\(url.lastPathComponent)”"
+            } catch is CancellationError {
+                return
+            } catch {
+                self?.printStatus = "诊断报告导出失败：\(error.localizedDescription)"
+            }
+        }
     }
 
     private func formatMillimeters(_ value: Double) -> String {
@@ -943,13 +1181,19 @@ final class AppModel {
     }
 
     static func normalizedPrinterStatus(_ status: String) -> String {
-        status
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .trimmingCharacters(in: CharacterSet(charactersIn: "。.．"))
+        PrinterStatusText.normalize(status)
     }
 
     private static func normalizedCalibrationOffset(_ value: Double) -> Double {
         P1PrintGeometry.normalizedOffsetMM(value)
+    }
+
+    private static var runtimeArchitecture: String {
+        #if arch(arm64)
+        "Apple Silicon (arm64)"
+        #else
+        "未知架构"
+        #endif
     }
 }
 
@@ -957,23 +1201,14 @@ private extension NSPasteboard.PasteboardType {
     static let p1LabelLayers = NSPasteboard.PasteboardType("com.louis.p1label.layers")
 }
 
-enum LayerAlignment {
-    case left, horizontalCenter, right, top, verticalCenter, bottom
-}
-
 private enum DocumentOperationResult: Sendable {
-    case saved(document: LabelDocument, url: URL)
+    case saved(
+        document: LabelDocument,
+        url: URL,
+        continuingWith: PendingDocumentAction?
+    )
     case exported(url: URL)
     case opened(document: LabelDocument, url: URL)
     case importedCSV([[String: String]])
     case importedImage(DocumentFileService.ImportedImage, name: String)
-}
-
-struct PendingPrint: Identifiable, Sendable {
-    enum Source: Sendable, Equatable { case calibration, paperCalibration, document }
-
-    let id = UUID()
-    let data: Data
-    let name: String
-    let source: Source
 }

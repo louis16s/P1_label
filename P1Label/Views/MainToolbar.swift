@@ -34,6 +34,17 @@ struct MainToolbar: ToolbarContent {
                 }
             }
             Menu("文件", systemImage: "doc") {
+                Button("新建标签", systemImage: "doc") {
+                    model.requestNewDocument()
+                }
+                Menu("从模板新建", systemImage: "square.grid.2x2") {
+                    ForEach(DocumentTemplate.allCases) { template in
+                        Button(template.displayName, systemImage: template.systemImage) {
+                            model.requestTemplate(template)
+                        }
+                    }
+                }
+                Divider()
                 Button("保存", systemImage: "square.and.arrow.down") {
                     model.requestSave()
                 }

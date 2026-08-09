@@ -40,8 +40,11 @@ private struct EditableCanvas: View {
     let moveSelection: (Double, Double) -> Void
     @State private var zoom = 1.0
     @State private var editingObjectID: UUID?
+    @State private var snapTargets: CanvasSnapTargets?
+    @State private var activeGuides = CanvasGuideState.none
     @AppStorage("nudgeStep") private var keyboardStep = 0.1
     @AppStorage("snapToGrid") private var snapToGrid = true
+    @AppStorage("snapToObjects") private var snapToObjects = true
 
     var body: some View {
         VStack(spacing: 12) {
@@ -116,7 +119,10 @@ private struct EditableCanvas: View {
                     snapToGrid: snapToGrid,
                     paperWidth: document.paper.widthMM,
                     paperHeight: document.paper.heightMM,
-                    moveSelection: moveSelection
+                    moveSelection: moveSelection,
+                    beginDrag: { beginLayerDrag(layer.id) },
+                    moveLayer: { x, y in moveLayer(layer.id, proposedX: x, proposedY: y) },
+                    endDrag: endLayerDrag
                 ) { additive in
                     select(layer.id, additive: additive)
                 } beginEditing: {
@@ -139,25 +145,66 @@ private struct EditableCanvas: View {
 
     @ViewBuilder
     private func alignmentGuides(scale: Double) -> some View {
-        if let selection,
-           let layer = document.layers.first(where: { $0.id == selection }) {
-            if abs(layer.x + layer.width / 2 - document.paper.widthMM / 2) < 0.01 {
-                Rectangle()
-                    .fill(Color.accentColor.opacity(0.7))
-                    .frame(width: 1, height: document.paper.heightMM * scale)
-                    .position(x: document.paper.widthMM * scale / 2,
-                              y: document.paper.heightMM * scale / 2)
-                    .allowsHitTesting(false)
-            }
-            if abs(layer.y + layer.height / 2 - document.paper.heightMM / 2) < 0.01 {
-                Rectangle()
-                    .fill(Color.accentColor.opacity(0.7))
-                    .frame(width: document.paper.widthMM * scale, height: 1)
-                    .position(x: document.paper.widthMM * scale / 2,
-                              y: document.paper.heightMM * scale / 2)
-                    .allowsHitTesting(false)
-            }
+        if let x = activeGuides.verticalMM {
+            Rectangle()
+                .fill(Color.accentColor.opacity(0.75))
+                .frame(width: 1, height: document.paper.heightMM * scale)
+                .position(x: x * scale, y: document.paper.heightMM * scale / 2)
+                .allowsHitTesting(false)
         }
+        if let y = activeGuides.horizontalMM {
+            Rectangle()
+                .fill(Color.accentColor.opacity(0.75))
+                .frame(width: document.paper.widthMM * scale, height: 1)
+                .position(x: document.paper.widthMM * scale / 2, y: y * scale)
+                .allowsHitTesting(false)
+        }
+    }
+
+    private func beginLayerDrag(_ id: UUID) {
+        activeGuides = .none
+        snapTargets = snapToObjects
+            ? CanvasSnapTargets.make(
+                paper: document.paper,
+                layers: document.layers,
+                excluding: id
+            )
+            : nil
+    }
+
+    private func moveLayer(_ id: UUID, proposedX: Double, proposedY: Double) {
+        guard let index = document.layers.firstIndex(where: { $0.id == id }) else { return }
+        let layer = document.layers[index]
+        let targets: CanvasSnapTargets
+        if snapToObjects {
+            targets = snapTargets ?? CanvasSnapTargets.make(
+                paper: document.paper,
+                layers: document.layers,
+                excluding: id
+            )
+        } else {
+            targets = CanvasSnapTargets(horizontal: [], vertical: [])
+        }
+        let result = targets.snap(
+            x: proposedX,
+            y: proposedY,
+            layerSize: CGSize(width: layer.width, height: layer.height),
+            paper: document.paper,
+            gridStep: snapToGrid ? 0.5 : nil
+        )
+        if activeGuides != result.guides {
+            activeGuides = result.guides
+        }
+        guard layer.x != result.x || layer.y != result.y else { return }
+        var movedLayer = layer
+        movedLayer.x = result.x
+        movedLayer.y = result.y
+        document.layers[index] = movedLayer
+    }
+
+    private func endLayerDrag() {
+        snapTargets = nil
+        activeGuides = .none
     }
 
     private func setZoom(_ value: Double) {
@@ -202,6 +249,9 @@ private struct CanvasLayer: View {
     let paperWidth: Double
     let paperHeight: Double
     let moveSelection: (Double, Double) -> Void
+    let beginDrag: () -> Void
+    let moveLayer: (Double, Double) -> Void
+    let endDrag: () -> Void
     let select: (Bool) -> Void
     let beginEditing: () -> Void
     let endEditing: () -> Void
@@ -252,12 +302,18 @@ private struct CanvasLayer: View {
                             if dragStart == nil {
                                 dragStart = CGPoint(x: layer.x, y: layer.y)
                                 if !isSelected { select(false) }
+                                beginDrag()
                             }
                             guard let dragStart else { return }
-                            layer.x = snappedX(dragStart.x + translation.width / scale)
-                            layer.y = snappedY(dragStart.y + translation.height / scale)
+                            moveLayer(
+                                dragStart.x + translation.width / scale,
+                                dragStart.y + translation.height / scale
+                            )
                         },
-                        onDragEnded: { dragStart = nil }
+                        onDragEnded: {
+                            dragStart = nil
+                            endDrag()
+                        }
                     )
                     .accessibilityLabel(layer.name)
                 }
@@ -335,45 +391,29 @@ private struct CanvasLayer: View {
         let top = resizeStart.y
         let bottom = resizeStart.y + resizeStart.height
 
+        var resizedLayer = layer
         if handle.movesLeft {
             let newLeft = min(right - minimum, max(0, snap(left + dx)))
-            layer.x = newLeft
-            layer.width = right - newLeft
+            resizedLayer.x = newLeft
+            resizedLayer.width = right - newLeft
         } else if handle.movesRight {
             let newRight = max(left + minimum, min(paperWidth, snap(right + dx)))
-            layer.x = left
-            layer.width = newRight - left
+            resizedLayer.x = left
+            resizedLayer.width = newRight - left
         }
 
         if handle.movesTop {
             let newTop = min(bottom - minimum, max(0, snap(top + dy)))
-            layer.y = newTop
-            layer.height = bottom - newTop
+            resizedLayer.y = newTop
+            resizedLayer.height = bottom - newTop
         } else if handle.movesBottom {
             let newBottom = max(top + minimum, min(paperHeight, snap(bottom + dy)))
-            layer.y = top
-            layer.height = newBottom - top
+            resizedLayer.y = top
+            resizedLayer.height = newBottom - top
         }
-    }
-
-    private func clampedX(_ value: Double) -> Double {
-        min(max(0, value), max(0, paperWidth - layer.width))
-    }
-
-    private func clampedY(_ value: Double) -> Double {
-        min(max(0, value), max(0, paperHeight - layer.height))
-    }
-
-    private func snappedX(_ value: Double) -> Double {
-        let centered = paperWidth / 2 - layer.width / 2
-        if abs(value - centered) < 0.3 { return clampedX(centered) }
-        return clampedX(snap(value))
-    }
-
-    private func snappedY(_ value: Double) -> Double {
-        let centered = paperHeight / 2 - layer.height / 2
-        if abs(value - centered) < 0.3 { return clampedY(centered) }
-        return clampedY(snap(value))
+        if resizedLayer != layer {
+            layer = resizedLayer
+        }
     }
 
     private func snap(_ value: Double) -> Double {

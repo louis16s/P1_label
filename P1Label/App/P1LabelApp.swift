@@ -17,6 +17,7 @@ struct P1LabelApp: App {
         WindowGroup(id: "main") {
             ContentView(model: model)
                 .frame(minWidth: 1_000, minHeight: 680)
+                .onAppear { appDelegate.model = model }
         }
         .defaultSize(width: 1_260, height: 820)
         .commands {
@@ -41,6 +42,12 @@ struct P1LabelApp: App {
         .defaultSize(width: 720, height: 620)
         .restorationBehavior(.disabled)
 
+        Window("打印历史", id: "print-history") {
+            PrintHistoryView(model: model)
+                .frame(minWidth: 560, minHeight: 420)
+        }
+        .defaultSize(width: 680, height: 520)
+
         Settings {
             SettingsView(model: model)
         }
@@ -49,6 +56,8 @@ struct P1LabelApp: App {
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    weak var model: AppModel?
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSWindow.allowsAutomaticWindowTabbing = false
         NSApp.setActivationPolicy(.regular)
@@ -69,6 +78,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidBecomeActive(_ notification: Notification) {
         disableTabbingForAllWindows()
         removeWindowTabCommands()
+    }
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard let model, model.requiresTerminationCoordination else { return .terminateNow }
+        model.requestApplicationTermination { shouldTerminate in
+            sender.reply(toApplicationShouldTerminate: shouldTerminate)
+        }
+        return .terminateLater
     }
 
     @objc private func windowDidBecomeKey(_ notification: Notification) {

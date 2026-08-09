@@ -1037,6 +1037,150 @@ struct P1ProtocolTests {
         // so antialiasing may touch the immediately preceding column.
         #expect((63...64).contains(firstPrintedColumn ?? -1))
     }
+
+    @MainActor
+    @Test func destructiveDocumentActionsRequireAnUnsavedChangesDecision() throws {
+        let suiteName = "P1LabelTests.unsaved.\(UUID().uuidString)"
+        let preferences = try #require(UserDefaults(suiteName: suiteName))
+        defer { preferences.removePersistentDomain(forName: suiteName) }
+        let model = AppModel(preferences: preferences)
+        model.addTextLayer()
+
+        model.requestTemplate(.price)
+        #expect(model.pendingDocumentAction == .newDocument(.price))
+        #expect(model.document.name == "未命名标签")
+        model.resolveUnsavedChanges(.discard)
+        #expect(model.pendingDocumentAction == nil)
+        #expect(model.document.name == "价格标签")
+        #expect(!model.hasUnsavedChanges)
+
+        model.addTextLayer()
+        var terminationResult: Bool?
+        model.requestApplicationTermination { terminationResult = $0 }
+        model.resolveUnsavedChanges(.cancel)
+        #expect(terminationResult == false)
+
+        terminationResult = nil
+        model.requestApplicationTermination { terminationResult = $0 }
+        model.resolveUnsavedChanges(.discard)
+        #expect(terminationResult == true)
+    }
+
+    @MainActor
+    @Test func savingBeforeDestructiveActionPreservesTheEditedDocument() async throws {
+        let suiteName = "P1LabelTests.saveBeforeAction.\(UUID().uuidString)"
+        let preferences = try #require(UserDefaults(suiteName: suiteName))
+        defer { preferences.removePersistentDomain(forName: suiteName) }
+        let folder = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let url = folder.appendingPathComponent("before-template.p1label.json")
+        let model = AppModel(preferences: preferences)
+        model.addTextLayer()
+        let edited = model.document
+
+        model.saveDocument(to: url, continuingWith: .newDocument(.asset))
+        await model.waitForDocumentOperation()
+
+        #expect(try DocumentFileService.readDocument(from: url) == edited)
+        #expect(model.document.name == "资产标签")
+        #expect(!model.hasUnsavedChanges)
+    }
+
+    @MainActor
+    @Test func printHistoryPersistsMetadataAndKeepsBoundedRetryDataInMemory() throws {
+        let suiteName = "P1LabelTests.history.\(UUID().uuidString)"
+        let preferences = try #require(UserDefaults(suiteName: suiteName))
+        defer { preferences.removePersistentDomain(forName: suiteName) }
+        let store = PrintHistoryStore(preferences: preferences)
+        let job = PendingPrint(
+            data: Data([0x1F, 0x11, 0x22]),
+            name: "测试标签",
+            source: .document
+        )
+
+        let id = store.begin(job, connection: "USB · DeTong P1")
+        store.markFailed(id, message: "设备忙。")
+        #expect(store.entries.first?.status == .failed)
+        #expect(store.entries.first?.detail == "设备忙")
+        #expect(store.retryJob(id)?.data == job.data)
+
+        let relaunched = PrintHistoryStore(preferences: preferences)
+        #expect(relaunched.entries.first?.id == id)
+        #expect(relaunched.entries.first?.status == .failed)
+        #expect(!relaunched.canRetry(id))
+    }
+
+    @Test func diagnosticReportContainsUsefulStateWithoutPrivateContent() {
+        let report = DiagnosticReportService.report(for: DiagnosticSnapshot(
+            generatedAt: Date(timeIntervalSince1970: 0),
+            appVersion: "1.0.2",
+            appBuild: "1",
+            operatingSystem: "macOS 26",
+            architecture: "Apple Silicon (arm64)",
+            connectionKind: "USB",
+            usbDeviceCount: 1,
+            bluetoothState: "未连接",
+            deviceStatus: .sdk(code: 0x35),
+            recentPrintStates: [.succeeded, .failed]
+        ))
+
+        #expect(report.contains("打印机缺纸"))
+        #expect(report.contains("SDK 状态码：53"))
+        #expect(report.contains("- 已完成：1"))
+        #expect(!report.contains("机密标签内容"))
+        #expect(!report.contains("/Users/"))
+    }
+
+    @Test func builtInTemplatesStayInsideTheirPaperBounds() {
+        for template in DocumentTemplate.allCases {
+            let document = template.makeDocument()
+            #expect(P1PrintGeometry.supports(document.paper))
+            #expect(document.layers.allSatisfy(P1PrintGeometry.supports))
+            #expect(document.layers.allSatisfy { layer in
+                layer.x >= 0 && layer.y >= 0
+                    && layer.x + layer.width <= document.paper.widthMM
+                    && layer.y + layer.height <= document.paper.heightMM
+            })
+        }
+    }
+
+    @Test func canvasSnapUsesPaperAndObjectGuidesBeforeGrid() {
+        let moving = LabelLayer.shape(.rectangle, x: 2, y: 2)
+        var target = LabelLayer.shape(.rectangle, x: 22, y: 12)
+        target.width = 8
+        target.height = 6
+        let paper = PaperSize(widthMM: 40, heightMM: 30)
+        let targets = CanvasSnapTargets.make(
+            paper: paper,
+            layers: [moving, target],
+            excluding: moving.id
+        )
+
+        let objectSnap = targets.snap(
+            x: 21.8,
+            y: 11.8,
+            layerSize: CGSize(width: moving.width, height: moving.height),
+            paper: paper
+        )
+        #expect(objectSnap.x == 22)
+        #expect(objectSnap.y == 12)
+        #expect(objectSnap.guides.verticalMM == 22)
+        #expect(objectSnap.guides.horizontalMM == 12)
+
+        let centerSnap = targets.snap(
+            x: 11.9,
+            y: 9.9,
+            layerSize: CGSize(width: 16, height: 10),
+            paper: paper,
+            gridStep: nil
+        )
+        #expect(centerSnap.x == 12)
+        #expect(centerSnap.y == 10)
+        #expect(centerSnap.guides.verticalMM == 20)
+        #expect(centerSnap.guides.horizontalMM == 15)
+    }
 }
 
 private func inkBounds(_ raster: P1Raster) -> (minX: Int, minY: Int, maxX: Int, maxY: Int)? {

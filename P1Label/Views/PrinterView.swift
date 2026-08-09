@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct PrinterView: View {
+    @Environment(\.openWindow) private var openWindow
     @Bindable var model: AppModel
     @ObservedObject private var bluetoothPrinter: BluetoothPrinterController
 
@@ -140,6 +141,19 @@ struct PrinterView: View {
                         }
                     }
                 }
+            }
+            Section("记录与诊断") {
+                HStack {
+                    Button("打印历史…", systemImage: "clock.arrow.circlepath") {
+                        openWindow(id: "print-history")
+                    }
+                    Button("导出脱敏诊断报告…", systemImage: "square.and.arrow.up") {
+                        model.requestExportDiagnosticReport()
+                    }
+                }
+                Text("诊断报告不会包含标签内容、文件路径、设备标识或打印数据")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
         }
         .formStyle(.grouped)

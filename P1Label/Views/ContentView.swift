@@ -20,6 +20,28 @@ struct ContentView: View {
             } message: {
                 Text(model.documentPrintConfirmationMessage)
             }
+            .alert("保存更改？", isPresented: Binding(
+                get: { model.pendingDocumentAction != nil },
+                set: { presented in
+                    if !presented, model.pendingDocumentAction != nil {
+                        model.resolveUnsavedChanges(.cancel)
+                    }
+                }
+            )) {
+                Button("不保存", role: .destructive) {
+                    model.resolveUnsavedChanges(.discard)
+                }
+                Button("取消", role: .cancel) {
+                    model.resolveUnsavedChanges(.cancel)
+                }
+                Button("保存") {
+                    model.resolveUnsavedChanges(.save)
+                }
+            } message: {
+                Text(
+                    "“\(model.document.name)”包含未保存的更改。要在\(model.pendingDocumentAction?.confirmationName ?? "继续")前保存吗？"
+                )
+            }
     }
 
 }

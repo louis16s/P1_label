@@ -183,6 +183,11 @@ final class BluetoothPrinterController: NSObject, ObservableObject, CBCentralMan
         state = .disconnected
     }
 
+    func cancelCurrentTransfer() {
+        guard pendingWriteContinuation != nil else { return }
+        finishPendingWrite(throwing: CancellationError())
+    }
+
     func send(_ data: Data) async throws {
         guard let connectedPeripheral,
               connectedPeripheral.state == .connected,
