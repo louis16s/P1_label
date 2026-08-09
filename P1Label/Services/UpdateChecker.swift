@@ -8,9 +8,10 @@ struct AppUpdate: Equatable, Sendable {
 enum UpdateChecker {
     private static let latestReleaseURL = URL(
         string: "https://github.com/louis16s/P1_label/releases/latest"
-    )!
+    )
 
     static func availableUpdate(currentVersion: String) async throws -> AppUpdate? {
+        guard let latestReleaseURL else { throw UpdateCheckError.invalidResponse }
         var request = URLRequest(
             url: latestReleaseURL,
             cachePolicy: .reloadIgnoringLocalCacheData,

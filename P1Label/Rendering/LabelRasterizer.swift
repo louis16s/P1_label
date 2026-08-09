@@ -235,25 +235,7 @@ enum LabelRasterizer {
               height <= P1PrintGeometry.maximumPageHeightDots else {
             throw RenderError.invalidPaperHeight
         }
-        let maximumDimensionMM = Double(P1PrintGeometry.maximumPageHeightDots)
-            / P1PrintGeometry.dotsPerMillimeter
-        guard document.layers.allSatisfy({
-            $0.x.isFinite
-                && $0.y.isFinite
-                && $0.width.isFinite
-                && $0.height.isFinite
-                && $0.rotation.isFinite
-                && $0.fontSizeMM.isFinite
-                && $0.width > 0
-                && $0.height > 0
-                && $0.fontSizeMM > 0
-                && abs($0.x) <= maximumDimensionMM
-                && abs($0.y) <= maximumDimensionMM
-                && $0.width <= maximumDimensionMM
-                && $0.height <= maximumDimensionMM
-                && $0.fontSizeMM <= 100
-                && abs($0.rotation) <= 360_000
-        }) else {
+        guard document.layers.allSatisfy(P1PrintGeometry.supports) else {
             throw RenderError.invalidLayerGeometry
         }
     }

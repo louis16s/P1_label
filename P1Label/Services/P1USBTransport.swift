@@ -1,11 +1,10 @@
 import Foundation
 import P1USBBridge
 
-actor P1USBTransport: PrinterTransport {
-    let transportName = "USB"
+actor P1USBTransport {
     private var operationInProgress = false
 
-    func connect() async throws {
+    func probe() async throws {
         try beginOperation()
         defer { operationInProgress = false }
         try await Self.runDetached {
@@ -30,8 +29,6 @@ actor P1USBTransport: PrinterTransport {
             }
         }
     }
-
-    func disconnect() async {}
 
     func readPortStatus() async throws -> P1PrinterPortStatus {
         try beginOperation()

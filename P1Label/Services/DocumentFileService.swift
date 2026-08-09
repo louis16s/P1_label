@@ -127,18 +127,7 @@ enum DocumentFileService {
     private static func validate(_ document: LabelDocument) throws {
         guard P1PrintGeometry.supports(document.paper),
               document.layers.count <= 10_000,
-              document.layers.allSatisfy({ layer in
-                  layer.x.isFinite
-                      && layer.y.isFinite
-                      && layer.width.isFinite
-                      && layer.height.isFinite
-                      && layer.rotation.isFinite
-                      && layer.fontSizeMM.isFinite
-                      && layer.imageThreshold.isFinite
-                      && layer.width > 0
-                      && layer.height > 0
-                      && layer.fontSizeMM > 0
-              }) else {
+              document.layers.allSatisfy(P1PrintGeometry.supports) else {
             throw DocumentFileError.invalidDocumentGeometry
         }
     }

@@ -83,24 +83,22 @@ enum PhotoCalibrationAnalyzer {
     }
 
     static func analyze(photoURL: URL, paper: PaperSize) throws -> PhotoCalibrationResult {
+        let visionOptions: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: 4_096,
+            kCGImageSourceShouldCacheImmediately: true
+        ]
         guard let source = CGImageSourceCreateWithURL(photoURL as CFURL, nil),
-              let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
+              let image = CGImageSourceCreateThumbnailAtIndex(
+                source,
+                0,
+                visionOptions as CFDictionary
+              ) else {
             throw PhotoCalibrationError.cannotReadImage
         }
 
-        let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any]
-        let rawOrientation = properties?[kCGImagePropertyOrientation] as? UInt32 ?? 1
-        let orientation = CGImagePropertyOrientation(rawValue: rawOrientation) ?? .up
-        let swapsDimensions: Bool
-        switch orientation {
-        case .left, .leftMirrored, .right, .rightMirrored:
-            swapsDimensions = true
-        default:
-            swapsDimensions = false
-        }
-        let orientedWidth = swapsDimensions ? image.height : image.width
-        let orientedHeight = swapsDimensions ? image.width : image.height
-        let imageAspect = Double(orientedWidth) / Double(orientedHeight)
+        let imageAspect = Double(image.width) / Double(image.height)
 
         let request = VNDetectRectanglesRequest()
         request.maximumObservations = 32
@@ -110,7 +108,7 @@ enum PhotoCalibrationAnalyzer {
         request.minimumSize = 0.035
         request.quadratureTolerance = 35
 
-        try VNImageRequestHandler(cgImage: image, orientation: orientation).perform([request])
+        try VNImageRequestHandler(cgImage: image, orientation: .up).perform([request])
         let observations = request.results ?? []
         guard observations.count >= 2 else {
             throw PhotoCalibrationError.paperEdgeNotFound
@@ -584,12 +582,17 @@ private extension PhotoCalibrationAnalyzer.Quadrilateral {
         _ other: PhotoCalibrationAnalyzer.Quadrilateral,
         tolerance: Double
     ) -> Bool {
-        let minimumX = points.map(\.x).min()! - tolerance
-        let maximumX = points.map(\.x).max()! + tolerance
-        let minimumY = points.map(\.y).min()! - tolerance
-        let maximumY = points.map(\.y).max()! + tolerance
+        let horizontal = points.map(\.x)
+        let vertical = points.map(\.y)
+        guard let minimumX = horizontal.min(),
+              let maximumX = horizontal.max(),
+              let minimumY = vertical.min(),
+              let maximumY = vertical.max() else { return false }
         return other.points.allSatisfy {
-            $0.x >= minimumX && $0.x <= maximumX && $0.y >= minimumY && $0.y <= maximumY
+            $0.x >= minimumX - tolerance
+                && $0.x <= maximumX + tolerance
+                && $0.y >= minimumY - tolerance
+                && $0.y <= maximumY + tolerance
         }
     }
 }

@@ -106,7 +106,7 @@ struct P1LabelCommands: Commands {
                 .keyboardShortcut(",", modifiers: [.command, .shift])
             Divider()
             Button("刷新 USB 连接") { model.refreshUSBDevices() }
-            Button("扫描蓝牙打印机") { model.bluetoothDiscovery.startScan() }
+            Button("扫描蓝牙打印机") { model.bluetoothPrinter.startScan() }
             Button("读取打印机状态") { model.refreshPrinterStatus() }
                 .disabled(!model.hasConnectedPrinter)
             Divider()

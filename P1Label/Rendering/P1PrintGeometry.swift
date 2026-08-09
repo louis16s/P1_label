@@ -4,6 +4,7 @@ enum P1PrintGeometry {
     static let dotsPerMillimeter = 8.0
     static let maximumWidthDots = P1Protocol.printWidthBytes * 8
     static let maximumPageHeightDots = 0x3FFF
+    static let maximumDimensionMM = Double(maximumPageHeightDots) / dotsPerMillimeter
 
     static func dots(forMillimeters value: Double) -> Int {
         guard value.isFinite else { return 0 }
@@ -31,5 +32,25 @@ enum P1PrintGeometry {
         let height = dots(forMillimeters: paper.heightMM)
         return (1...maximumWidthDots).contains(width)
             && (1...maximumPageHeightDots).contains(height)
+    }
+
+    static func supports(_ layer: LabelLayer) -> Bool {
+        layer.x.isFinite
+            && layer.y.isFinite
+            && layer.width.isFinite
+            && layer.height.isFinite
+            && layer.rotation.isFinite
+            && layer.fontSizeMM.isFinite
+            && layer.imageThreshold.isFinite
+            && layer.width > 0
+            && layer.height > 0
+            && layer.fontSizeMM > 0
+            && abs(layer.x) <= maximumDimensionMM
+            && abs(layer.y) <= maximumDimensionMM
+            && layer.width <= maximumDimensionMM
+            && layer.height <= maximumDimensionMM
+            && layer.fontSizeMM <= 100
+            && abs(layer.rotation) <= 360_000
+            && (0...1).contains(layer.imageThreshold)
     }
 }

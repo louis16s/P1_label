@@ -138,7 +138,7 @@ struct LabelLayer: Identifiable, Codable, Hashable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case id, kind, name, x, y, width, height, rotation, isHidden, isLocked
         case text, fontSizeMM, isBold, isItalic, isUnderline, isStrikethrough
-        case textAlignment, fontName, imageData, imageThreshold, imageDither
+        case textAlignment, fontName, imageData, imageThreshold
         case imageAlgorithm, imagePreviewMode, imageScaleMode
     }
 
@@ -214,15 +214,10 @@ struct LabelLayer: Identifiable, Codable, Hashable, Sendable {
         fontName = try values.decodeIfPresent(String.self, forKey: .fontName) ?? ".AppleSystemUIFont"
         imageData = try values.decodeIfPresent(Data.self, forKey: .imageData)
         imageThreshold = try values.decodeIfPresent(Double.self, forKey: .imageThreshold) ?? 0.62
-        if let savedAlgorithm = try values.decodeIfPresent(
+        imageAlgorithm = try values.decodeIfPresent(
             LabelImageAlgorithm.self,
             forKey: .imageAlgorithm
-        ) {
-            imageAlgorithm = savedAlgorithm
-        } else {
-            let legacyDither = try values.decodeIfPresent(Bool.self, forKey: .imageDither) ?? true
-            imageAlgorithm = legacyDither ? .floydSteinberg : .threshold
-        }
+        ) ?? .floydSteinberg
         imagePreviewMode = try values.decodeIfPresent(
             LabelImagePreviewMode.self,
             forKey: .imagePreviewMode

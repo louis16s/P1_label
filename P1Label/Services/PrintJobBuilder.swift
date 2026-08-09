@@ -129,7 +129,7 @@ enum PrintJobBuilder {
             darkness: settings.darkness,
             speed: settings.speed
         )
-        let copies = max(1, settings.copies)
+        let copies = min(99, max(1, settings.copies))
         var result = Data()
         result.reserveCapacity(oneJob.count * copies)
         for _ in 0..<copies {

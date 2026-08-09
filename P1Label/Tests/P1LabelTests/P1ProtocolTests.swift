@@ -404,7 +404,7 @@ struct P1ProtocolTests {
         #expect(raster.dots.contains(true))
     }
 
-    @Test func labelBackupRoundTripsAllLayerData() throws {
+    @Test func documentRoundTripsAllLayerData() throws {
         var document = LabelDocument.example
         document.layers.append(.image(Data([0x01, 0x02, 0x03]), name: "测试图片", x: 3, y: 4))
         document.layers[0].fontName = "PingFang SC"
@@ -422,6 +422,20 @@ struct P1ProtocolTests {
         let restored = try JSONDecoder().decode(LabelDocument.self, from: data)
         #expect(restored == document)
         #expect(restored.layers.last?.imageData == Data([0x01, 0x02, 0x03]))
+    }
+
+    @Test func obsoleteImageDitherFieldIsIgnored() throws {
+        let layer = LabelLayer.image(Data([0x01]), name: "旧字段", x: 0, y: 0)
+        let encoded = try JSONEncoder().encode(layer)
+        var object = try #require(
+            JSONSerialization.jsonObject(with: encoded) as? [String: Any]
+        )
+        object.removeValue(forKey: "imageAlgorithm")
+        object["imageDither"] = false
+
+        let oldSchemaData = try JSONSerialization.data(withJSONObject: object)
+        let decoded = try JSONDecoder().decode(LabelLayer.self, from: oldSchemaData)
+        #expect(decoded.imageAlgorithm == .floydSteinberg)
     }
 
     @MainActor
@@ -474,6 +488,32 @@ struct P1ProtocolTests {
         #expect(relaunchedModel.printDarkness == 10)
         #expect(relaunchedModel.printSpeed == 3)
         #expect(relaunchedModel.printCopies == 4)
+    }
+
+    @MainActor
+    @Test func invalidPersistedPrintSettingsAreClamped() throws {
+        let suiteName = "P1LabelTests.\(UUID().uuidString)"
+        let preferences = try #require(UserDefaults(suiteName: suiteName))
+        defer { preferences.removePersistentDomain(forName: suiteName) }
+        preferences.set(-100, forKey: "gapLengthMM")
+        preferences.set(500, forKey: "printDarkness")
+        preferences.set(-5, forKey: "printSpeed")
+        preferences.set(Int.max, forKey: "printCopies")
+
+        let model = AppModel(preferences: preferences)
+        #expect(model.gapLengthMM == 1)
+        #expect(model.printDarkness == 15)
+        #expect(model.printSpeed == 0)
+        #expect(model.printCopies == 99)
+
+        model.gapLengthMM = 100
+        model.printDarkness = -1
+        model.printSpeed = 100
+        model.printCopies = 0
+        #expect(model.gapLengthMM == 10)
+        #expect(model.printDarkness == 0)
+        #expect(model.printSpeed == 5)
+        #expect(model.printCopies == 1)
     }
 
     @Test func defaultTextBoxHeightMatchesFontLineMetrics() {
@@ -696,7 +736,7 @@ struct P1ProtocolTests {
     }
 
     @MainActor
-    @Test func fileWorkflowsSaveOpenExportAndImportRealFiles() throws {
+    @Test func fileWorkflowsSaveOpenExportAndImportRealFiles() async throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("P1LabelTests-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(
@@ -709,13 +749,15 @@ struct P1ProtocolTests {
         let model = AppModel()
         model.document.name = "可编辑标题"
         model.addTextLayer()
-        #expect(model.saveDocument(to: savedURL))
+        model.saveDocument(to: savedURL)
+        await model.waitForDocumentOperation()
         #expect(FileManager.default.fileExists(atPath: savedURL.path))
         #expect(model.currentDocumentURL == savedURL)
         #expect(!model.hasUnsavedChanges)
 
         let reopened = AppModel()
-        #expect(reopened.openDocument(from: savedURL))
+        reopened.openDocument(from: savedURL)
+        await reopened.waitForDocumentOperation()
         #expect(reopened.document.name == "可编辑标题")
         #expect(reopened.document.layers.count == 1)
         #expect(reopened.currentDocumentURL == savedURL)
@@ -723,13 +765,15 @@ struct P1ProtocolTests {
         let exportedURL = directory.appendingPathComponent("导出副本.p1label.json")
         let exportOnlyModel = AppModel()
         exportOnlyModel.document.name = "副本"
-        #expect(exportOnlyModel.exportDocumentCopy(to: exportedURL))
+        exportOnlyModel.exportDocumentCopy(to: exportedURL)
+        await exportOnlyModel.waitForDocumentOperation()
         #expect(FileManager.default.fileExists(atPath: exportedURL.path))
         #expect(exportOnlyModel.currentDocumentURL == nil)
 
         let csvURL = directory.appendingPathComponent("批量.csv")
         try Data("姓名,编号\n小王,001\n小李,002\n".utf8).write(to: csvURL)
-        #expect(reopened.importCSV(from: csvURL))
+        reopened.importCSV(from: csvURL)
+        await reopened.waitForDocumentOperation()
         #expect(reopened.batchRecords.count == 2)
         #expect(reopened.batchRecords[0]["姓名"] == "小王")
 
@@ -748,10 +792,12 @@ struct P1ProtocolTests {
         let imageURL = directory.appendingPathComponent("图片.png")
         let png = try #require(bitmap.representation(using: .png, properties: [:]))
         try png.write(to: imageURL)
-        #expect(reopened.importImage(from: imageURL))
+        reopened.importImage(from: imageURL)
+        await reopened.waitForDocumentOperation()
         #expect(reopened.document.layers.last?.kind == .image)
 
-        #expect(!reopened.openDocument(from: csvURL))
+        reopened.openDocument(from: csvURL)
+        await reopened.waitForDocumentOperation()
         #expect(reopened.printStatus.contains("打开失败"))
     }
 
@@ -790,7 +836,8 @@ struct P1ProtocolTests {
 
         let url = directory.appendingPathComponent("自动保存.p1label.json")
         let model = AppModel()
-        #expect(model.saveDocument(to: url))
+        model.saveDocument(to: url)
+        await model.waitForDocumentOperation()
         model.document.name = "自动保存后的名称"
         model.printStatus = "打印机开盖"
         await model.waitForAutosave()
@@ -857,6 +904,29 @@ struct P1ProtocolTests {
         #expect(model.hasUnsavedChanges)
     }
 
+    @Test func documentHistoryCoalescesRapidEditsAndTracksSavedSnapshot() throws {
+        let original = LabelDocument.blank
+        var firstEdit = original
+        firstEdit.name = "第一个输入"
+        var secondEdit = firstEdit
+        secondEdit.name = "连续输入"
+        var history = DocumentHistory(savedDocument: original)
+        let start = Date(timeIntervalSinceReferenceDate: 1_000)
+
+        history.recordChange(from: original, at: start)
+        history.recordChange(from: firstEdit, at: start.addingTimeInterval(0.1))
+        #expect(history.canUndo)
+        let undone = history.undo(current: secondEdit)
+        #expect(try #require(undone) == original)
+        #expect(history.canRedo)
+        let redone = history.redo(current: original)
+        #expect(try #require(redone) == secondEdit)
+
+        history.markSaved(secondEdit)
+        #expect(!history.isDirty(secondEdit))
+        #expect(history.isDirty(original))
+    }
+
     @MainActor
     @Test func printerStatusRemovesOnlyTrailingSentenceStops() {
         let model = AppModel()
@@ -903,12 +973,12 @@ struct P1ProtocolTests {
     }
 
     @Test func bluetoothTransferTimeoutScalesAndIsBounded() {
-        #expect(BluetoothDiscovery.transferTimeoutMilliseconds(forByteCount: 1) == 15_000)
-        let medium = BluetoothDiscovery.transferTimeoutMilliseconds(forByteCount: 50_000)
+        #expect(BluetoothPrinterController.transferTimeoutMilliseconds(forByteCount: 1) == 15_000)
+        let medium = BluetoothPrinterController.transferTimeoutMilliseconds(forByteCount: 50_000)
         #expect(medium > 15_000)
         #expect(medium < 600_000)
         #expect(
-            BluetoothDiscovery.transferTimeoutMilliseconds(forByteCount: Int.max)
+            BluetoothPrinterController.transferTimeoutMilliseconds(forByteCount: Int.max)
                 == 600_000
         )
     }

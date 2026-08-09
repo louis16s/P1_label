@@ -30,16 +30,32 @@ final class AppModel {
         didSet { preferences.set(paperMode.rawValue, forKey: "paperMode") }
     }
     var gapLengthMM: Int {
-        didSet { preferences.set(gapLengthMM, forKey: "gapLengthMM") }
+        didSet {
+            let normalized = min(10, max(1, gapLengthMM))
+            if gapLengthMM != normalized { gapLengthMM = normalized }
+            preferences.set(normalized, forKey: "gapLengthMM")
+        }
     }
     var printDarkness: Int {
-        didSet { preferences.set(printDarkness, forKey: "printDarkness") }
+        didSet {
+            let normalized = min(15, max(0, printDarkness))
+            if printDarkness != normalized { printDarkness = normalized }
+            preferences.set(normalized, forKey: "printDarkness")
+        }
     }
     var printSpeed: Int {
-        didSet { preferences.set(printSpeed, forKey: "printSpeed") }
+        didSet {
+            let normalized = min(5, max(0, printSpeed))
+            if printSpeed != normalized { printSpeed = normalized }
+            preferences.set(normalized, forKey: "printSpeed")
+        }
     }
     var printCopies: Int {
-        didSet { preferences.set(printCopies, forKey: "printCopies") }
+        didSet {
+            let normalized = min(99, max(1, printCopies))
+            if printCopies != normalized { printCopies = normalized }
+            preferences.set(normalized, forKey: "printCopies")
+        }
     }
     var printInverted: Bool {
         didSet { preferences.set(printInverted, forKey: "printInverted") }
@@ -62,14 +78,11 @@ final class AppModel {
             preferences.set(normalized, forKey: "printOffsetY")
         }
     }
-    let bluetoothDiscovery = BluetoothDiscovery()
+    let bluetoothPrinter = BluetoothPrinterController()
     private let usbTransport = P1USBTransport()
     private let preferences: UserDefaults
-    @ObservationIgnored private var undoStack: [LabelDocument] = []
-    @ObservationIgnored private var redoStack: [LabelDocument] = []
+    @ObservationIgnored private var history = DocumentHistory(savedDocument: .blank)
     @ObservationIgnored private var suppressHistory = false
-    @ObservationIgnored private var lastHistoryDate = Date.distantPast
-    @ObservationIgnored private var lastSavedDocument = LabelDocument.blank
     @ObservationIgnored private var autosaveTask: Task<Void, Never>?
     @ObservationIgnored private var documentOperationTask: Task<Void, Never>?
     @ObservationIgnored private var documentOperationID: UUID?
@@ -79,10 +92,12 @@ final class AppModel {
     @ObservationIgnored private var printCompletionResetTask: Task<Void, Never>?
     @ObservationIgnored private var printPreparationTask: Task<Void, Never>?
     @ObservationIgnored private var printPreparationID: UUID?
+    @ObservationIgnored private var printSendingTask: Task<Void, Never>?
     @ObservationIgnored private var isAutomaticallyDiscoveringPrinter = false
     private(set) var canUndo = false
     private(set) var canRedo = false
     private(set) var hasUnsavedChanges = false
+    private(set) var isSendingPrint = false
 
     init(preferences: UserDefaults = .standard) {
         self.preferences = preferences
@@ -94,10 +109,10 @@ final class AppModel {
         )
         gapLengthMM = preferences.object(forKey: "gapLengthMM") == nil
             ? 2
-            : preferences.integer(forKey: "gapLengthMM")
-        printDarkness = preferences.integer(forKey: "printDarkness")
-        printSpeed = preferences.integer(forKey: "printSpeed")
-        printCopies = max(1, preferences.integer(forKey: "printCopies"))
+            : min(10, max(1, preferences.integer(forKey: "gapLengthMM")))
+        printDarkness = min(15, max(0, preferences.integer(forKey: "printDarkness")))
+        printSpeed = min(5, max(0, preferences.integer(forKey: "printSpeed")))
+        printCopies = min(99, max(1, preferences.integer(forKey: "printCopies")))
         printInverted = preferences.bool(forKey: "printInverted")
         if let savedMode = preferences.object(forKey: "paperMode") as? NSNumber,
            let mode = P1PaperMode(rawValue: savedMode.intValue) {
@@ -117,11 +132,11 @@ final class AppModel {
     }
 
     var hasConnectedPrinter: Bool {
-        !usbDevices.isEmpty || bluetoothDiscovery.isConnected
+        !usbDevices.isEmpty || bluetoothPrinter.isConnected
     }
 
     var activePrintConnectionName: String {
-        if let name = bluetoothDiscovery.connectedName {
+        if let name = bluetoothPrinter.connectedName {
             return "蓝牙 · \(name)"
         }
         return usbDevices.isEmpty ? "未连接" : "USB · DeTong P1"
@@ -157,11 +172,12 @@ final class AppModel {
     func newDocument() {
         cancelDocumentOperation()
         autosaveTask?.cancel()
+        LabelPreviewCache.shared.removeAll()
         replaceDocumentWithoutHistory(.blank)
         selectedLayerID = nil
         selectedLayerIDs = []
         currentDocumentURL = nil
-        resetHistory(markSaved: true)
+        resetHistory()
         printStatus = "已新建标签"
     }
 
@@ -170,7 +186,7 @@ final class AppModel {
             requestSaveAs()
             return
         }
-        saveDocumentInBackground(to: currentDocumentURL)
+        saveDocument(to: currentDocumentURL)
     }
 
     func requestSaveAs() {
@@ -179,14 +195,14 @@ final class AppModel {
             isExportCopy: false
         ) { [weak self] url in
             guard let self, let url else { return }
-            saveDocumentInBackground(to: url)
+            saveDocument(to: url)
         }
     }
 
     func requestOpenDocument() {
         FilePanelService.chooseLabel { [weak self] url in
             guard let self, let url else { return }
-            openDocumentInBackground(from: url)
+            openDocument(from: url)
         }
     }
 
@@ -196,25 +212,25 @@ final class AppModel {
             isExportCopy: true
         ) { [weak self] url in
             guard let self, let url else { return }
-            exportDocumentCopyInBackground(to: url)
+            exportDocumentCopy(to: url)
         }
     }
 
     func requestImportCSV() {
         FilePanelService.chooseCSV { [weak self] url in
             guard let self, let url else { return }
-            importCSVInBackground(from: url)
+            importCSV(from: url)
         }
     }
 
     func requestImportImage() {
         FilePanelService.chooseImage { [weak self] url in
             guard let self, let url else { return }
-            importImageInBackground(from: url)
+            importImage(from: url)
         }
     }
 
-    private func saveDocumentInBackground(to url: URL) {
+    func saveDocument(to url: URL) {
         let snapshot = document
         startDocumentOperation(failurePrefix: "保存失败") {
             try await DocumentFileService.writeAsync(snapshot, to: url)
@@ -222,7 +238,7 @@ final class AppModel {
         }
     }
 
-    private func exportDocumentCopyInBackground(to url: URL) {
+    func exportDocumentCopy(to url: URL) {
         let snapshot = document
         startDocumentOperation(failurePrefix: "导出失败") {
             try await DocumentFileService.writeAsync(snapshot, to: url)
@@ -230,19 +246,19 @@ final class AppModel {
         }
     }
 
-    private func openDocumentInBackground(from url: URL) {
+    func openDocument(from url: URL) {
         startDocumentOperation(failurePrefix: "打开失败") {
             .opened(document: try await DocumentFileService.readDocumentAsync(from: url), url: url)
         }
     }
 
-    private func importCSVInBackground(from url: URL) {
+    func importCSV(from url: URL) {
         startDocumentOperation(failurePrefix: "CSV 导入失败") {
             .importedCSV(try await DocumentFileService.readCSVRecordsAsync(from: url))
         }
     }
 
-    private func importImageInBackground(from url: URL) {
+    func importImage(from url: URL) {
         let name = url.deletingPathExtension().lastPathComponent
         startDocumentOperation(failurePrefix: "导入图片失败") {
             .importedImage(
@@ -308,80 +324,20 @@ final class AppModel {
         documentOperationTask = nil
     }
 
+    func waitForDocumentOperation() async {
+        let task = documentOperationTask
+        await task?.value
+    }
+
     func loadDocument(_ document: LabelDocument, from url: URL) {
         autosaveTask?.cancel()
+        LabelPreviewCache.shared.removeAll()
         replaceDocumentWithoutHistory(document)
         selectedLayerID = document.layers.last?.id
         selectedLayerIDs = Set(selectedLayerID.map { [$0] } ?? [])
         currentDocumentURL = url
-        resetHistory(markSaved: true)
+        resetHistory()
         printStatus = "已打开标签“\(document.name)”。"
-    }
-
-    @discardableResult
-    func saveDocument(to url: URL) -> Bool {
-        do {
-            try DocumentFileService.write(document, to: url)
-            currentDocumentURL = url
-            markCurrentDocumentSaved()
-            printStatus = "已保存“\(url.lastPathComponent)”"
-            return true
-        } catch {
-            printStatus = "保存失败：\(error.localizedDescription)"
-            return false
-        }
-    }
-
-    @discardableResult
-    func exportDocumentCopy(to url: URL) -> Bool {
-        do {
-            try DocumentFileService.write(document, to: url)
-            printStatus = "已导出标签副本“\(url.lastPathComponent)”"
-            return true
-        } catch {
-            printStatus = "导出失败：\(error.localizedDescription)"
-            return false
-        }
-    }
-
-    @discardableResult
-    func openDocument(from url: URL) -> Bool {
-        do {
-            let opened = try DocumentFileService.readDocument(from: url)
-            loadDocument(opened, from: url)
-            return true
-        } catch {
-            printStatus = "打开失败：\(error.localizedDescription)"
-            return false
-        }
-    }
-
-    @discardableResult
-    func importCSV(from url: URL) -> Bool {
-        do {
-            batchRecords = try DocumentFileService.readCSVRecords(from: url)
-            printStatus = "已载入 \(batchRecords.count) 条批量数据"
-            return true
-        } catch {
-            printStatus = "CSV 导入失败：\(error.localizedDescription)"
-            return false
-        }
-    }
-
-    @discardableResult
-    func importImage(from url: URL) -> Bool {
-        do {
-            let imported = try DocumentFileService.readImage(from: url)
-            addImageLayer(
-                data: imported.data,
-                name: url.deletingPathExtension().lastPathComponent,
-                aspectRatio: imported.aspectRatio
-            )
-            return true
-        } catch {
-            printStatus = "导入图片失败：\(error.localizedDescription)"
-            return false
-        }
     }
 
     func addTextLayer() {
@@ -498,37 +454,25 @@ final class AppModel {
     }
 
     func undo() {
-        guard let previous = undoStack.popLast() else { return }
-        redoStack.append(document)
+        guard let previous = history.undo(current: document) else { return }
         replaceDocumentWithoutHistory(previous)
         repairSelection()
-        lastHistoryDate = .distantPast
         updateHistoryState()
         scheduleAutosave()
     }
 
     func redo() {
-        guard let next = redoStack.popLast() else { return }
-        undoStack.append(document)
+        guard let next = history.redo(current: document) else { return }
         replaceDocumentWithoutHistory(next)
         repairSelection()
-        lastHistoryDate = .distantPast
         updateHistoryState()
         scheduleAutosave()
     }
 
     private func documentDidChange(from oldValue: LabelDocument) {
         guard !suppressHistory, oldValue != document else { return }
-        let now = Date()
-        if undoStack.isEmpty || now.timeIntervalSince(lastHistoryDate) > 0.45 {
-            undoStack.append(oldValue)
-            if undoStack.count > 100 {
-                undoStack.removeFirst(undoStack.count - 100)
-            }
-        }
-        lastHistoryDate = now
-        redoStack.removeAll()
-        canUndo = !undoStack.isEmpty
+        history.recordChange(from: oldValue)
+        canUndo = history.canUndo
         canRedo = false
         // A direct edit is always dirty. Comparing the complete document to
         // the last saved copy here made every drag and keystroke walk image
@@ -543,13 +487,8 @@ final class AppModel {
         suppressHistory = false
     }
 
-    private func resetHistory(markSaved: Bool) {
-        undoStack.removeAll()
-        redoStack.removeAll()
-        lastHistoryDate = .distantPast
-        if markSaved {
-            lastSavedDocument = document
-        }
+    private func resetHistory() {
+        history.reset(savedDocument: document)
         updateHistoryState()
     }
 
@@ -562,19 +501,14 @@ final class AppModel {
     }
 
     private func updateHistoryState() {
-        canUndo = !undoStack.isEmpty
-        canRedo = !redoStack.isEmpty
-        hasUnsavedChanges = document != lastSavedDocument
-    }
-
-    private func markCurrentDocumentSaved() {
-        lastSavedDocument = document
-        hasUnsavedChanges = false
+        canUndo = history.canUndo
+        canRedo = history.canRedo
+        hasUnsavedChanges = history.isDirty(document)
     }
 
     private func markSavedSnapshot(_ snapshot: LabelDocument) {
-        lastSavedDocument = snapshot
-        hasUnsavedChanges = document != snapshot
+        history.markSaved(snapshot)
+        hasUnsavedChanges = history.isDirty(document)
     }
 
     private func scheduleAutosave() {
@@ -670,18 +604,6 @@ final class AppModel {
                 printStatus = error.localizedDescription
                 finishPrintPreparation(id: preparationID)
             }
-        }
-    }
-
-    @discardableResult
-    func loadBatchCSV(_ data: Data) -> Bool {
-        do {
-            batchRecords = try CSVBatchParser.records(from: data)
-            printStatus = "已载入 \(batchRecords.count) 条批量数据。"
-            return true
-        } catch {
-            printStatus = "CSV 导入失败：\(error.localizedDescription)"
-            return false
         }
     }
 
@@ -832,14 +754,13 @@ final class AppModel {
     }
 
     func verifyUSBInterface() {
-        guard !usbDevices.isEmpty, !isVerifyingUSB else { return }
+        guard !usbDevices.isEmpty, !isVerifyingUSB, !isSendingPrint else { return }
         isVerifyingUSB = true
         printStatus = "正在验证 USB 打印通道…"
         Task {
             defer { isVerifyingUSB = false }
             do {
-                try await usbTransport.connect()
-                await usbTransport.disconnect()
+                try await usbTransport.probe()
                 printStatus = "已验证 P1 USB 打印接口。"
             } catch {
                 printStatus = "已检测到 P1；\(error.localizedDescription)"
@@ -848,11 +769,12 @@ final class AppModel {
     }
 
     func refreshPrinterStatus() {
+        guard !isSendingPrint else { return }
         printerStatusTask?.cancel()
-        if bluetoothDiscovery.isConnected {
+        if bluetoothPrinter.isConnected {
             printerStatusTask = Task {
                 do {
-                    let status = try await bluetoothDiscovery.requestPrinterStatus() ?? .unknown
+                    let status = try await bluetoothPrinter.requestPrinterStatus() ?? .unknown
                     guard !Task.isCancelled else { return }
                     deviceStatus = status
                     printStatus = "P1 状态：\(deviceStatus?.title ?? "状态未知")"
@@ -933,23 +855,35 @@ final class AppModel {
     }
 
     func confirmPendingPrint() {
-        guard let pendingPrint else { return }
+        guard let pendingPrint, !isSendingPrint else { return }
         self.pendingPrint = nil
-        Task {
+        let precedingStatusTask = printerStatusTask
+        printerStatusTask?.cancel()
+        printerStatusTask = nil
+        isSendingPrint = true
+        printSendingTask = Task { [weak self] in
+            guard let self else { return }
+            defer {
+                isSendingPrint = false
+                printSendingTask = nil
+            }
             do {
-                if bluetoothDiscovery.isConnected {
-                    if let status = try await bluetoothDiscovery.requestPrinterStatus(),
+                await precedingStatusTask?.value
+                try Task.checkCancellation()
+                if bluetoothPrinter.isConnected {
+                    if let status = try await bluetoothPrinter.requestPrinterStatus(),
                        !status.isReady {
                         deviceStatus = status
                         printStatus = "\(status.title)：\(status.detail)"
+                        self.pendingPrint = pendingPrint
                         return
                     }
-                    try await bluetoothDiscovery.send(pendingPrint.data)
+                    try await bluetoothPrinter.send(pendingPrint.data)
                     showPrintCompletedStatus(
-                        "“\(pendingPrint.name)”已通过\(activePrintConnectionName)发送 \(bluetoothDiscovery.lastTransferByteCount) 字节"
+                        "“\(pendingPrint.name)”已通过\(activePrintConnectionName)发送 \(bluetoothPrinter.lastTransferByteCount) 字节"
                     )
                     try? await Task.sleep(for: .milliseconds(500))
-                    if let status = try? await bluetoothDiscovery.requestPrinterStatus() {
+                    if let status = try? await bluetoothPrinter.requestPrinterStatus() {
                         deviceStatus = status
                         if !status.isReady {
                             printStatus = "\(status.title)：\(status.detail)"
@@ -963,8 +897,14 @@ final class AppModel {
                 }
             } catch {
                 printStatus = error.localizedDescription
+                self.pendingPrint = pendingPrint
             }
         }
+    }
+
+    func waitForPrintSending() async {
+        let task = printSendingTask
+        await task?.value
     }
 
     func cancelPendingPrint() {

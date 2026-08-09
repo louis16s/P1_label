@@ -2,11 +2,11 @@ import SwiftUI
 
 struct PrinterView: View {
     @Bindable var model: AppModel
-    @ObservedObject private var bluetoothDiscovery: BluetoothDiscovery
+    @ObservedObject private var bluetoothPrinter: BluetoothPrinterController
 
     init(model: AppModel) {
         self.model = model
-        _bluetoothDiscovery = ObservedObject(wrappedValue: model.bluetoothDiscovery)
+        _bluetoothPrinter = ObservedObject(wrappedValue: model.bluetoothPrinter)
     }
 
     var body: some View {
@@ -106,16 +106,16 @@ struct PrinterView: View {
                 HStack {
                     Text(bluetoothStateText)
                     Spacer()
-                    Button("扫描") { model.bluetoothDiscovery.startScan() }
-                        .disabled(model.bluetoothDiscovery.state == .scanning)
-                    Button("停止") { model.bluetoothDiscovery.stopScan() }
-                        .disabled(model.bluetoothDiscovery.state != .scanning)
+                    Button("扫描") { model.bluetoothPrinter.startScan() }
+                        .disabled(model.bluetoothPrinter.state == .scanning)
+                    Button("停止") { model.bluetoothPrinter.stopScan() }
+                        .disabled(model.bluetoothPrinter.state != .scanning)
                 }
-                if model.bluetoothDiscovery.peripherals.isEmpty {
+                if model.bluetoothPrinter.peripherals.isEmpty {
                     Text("尚未发现蓝牙设备")
                         .foregroundStyle(.secondary)
                 } else {
-                    ForEach(model.bluetoothDiscovery.peripherals) { device in
+                    ForEach(model.bluetoothPrinter.peripherals) { device in
                         HStack {
                             Image(systemName: bluetoothSignalIcon(device.rssi))
                                 .foregroundStyle(.secondary)
@@ -127,15 +127,15 @@ struct PrinterView: View {
                                     .foregroundStyle(.secondary)
                             }
                             Spacer()
-                            if model.bluetoothDiscovery.connectedID == device.id {
+                            if model.bluetoothPrinter.connectedID == device.id {
                                 Button("断开连接") {
-                                    model.bluetoothDiscovery.disconnect()
+                                    model.bluetoothPrinter.disconnect()
                                 }
                             } else {
                                 Button("连接") {
-                                    model.bluetoothDiscovery.connect(to: device.id)
+                                    model.bluetoothPrinter.connect(to: device.id)
                                 }
-                                .disabled(model.bluetoothDiscovery.isConnecting)
+                                .disabled(model.bluetoothPrinter.isConnecting)
                             }
                         }
                     }
@@ -164,7 +164,7 @@ struct PrinterView: View {
     }
 
     private var bluetoothStateText: String {
-        switch model.bluetoothDiscovery.state {
+        switch model.bluetoothPrinter.state {
         case .disconnected: "未扫描"
         case .scanning: "正在扫描…"
         case .connecting(let name): "正在连接 \(name)…"
@@ -174,7 +174,7 @@ struct PrinterView: View {
     }
 
     private func refreshConnectionAndStatus() {
-        if bluetoothDiscovery.isConnected {
+        if bluetoothPrinter.isConnected {
             model.refreshPrinterStatus()
             return
         }
@@ -185,8 +185,8 @@ struct PrinterView: View {
     }
 
     private var displayedDeviceStatus: P1DeviceStatus? {
-        if bluetoothDiscovery.isConnected {
-            return bluetoothDiscovery.latestDeviceStatus ?? model.deviceStatus
+        if bluetoothPrinter.isConnected {
+            return bluetoothPrinter.latestDeviceStatus ?? model.deviceStatus
         }
         return model.deviceStatus
     }

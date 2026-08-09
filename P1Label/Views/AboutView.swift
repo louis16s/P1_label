@@ -2,6 +2,7 @@ import SwiftUI
 
 struct AboutView: View {
     @State private var updateState: UpdateState = .idle
+    private static let repositoryURL = URL(string: "https://github.com/louis16s/P1_label")
 
     private var version: String {
         Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "开发版"
@@ -33,11 +34,10 @@ struct AboutView: View {
                 .buttonStyle(.borderedProminent)
                 .disabled(updateState.isChecking)
 
-                Link(
-                    "打开项目仓库",
-                    destination: URL(string: "https://github.com/louis16s/P1_label")!
-                )
-                .buttonStyle(.bordered)
+                if let repositoryURL = Self.repositoryURL {
+                    Link("打开项目仓库", destination: repositoryURL)
+                        .buttonStyle(.bordered)
+                }
             }
         }
         .frame(width: 400)

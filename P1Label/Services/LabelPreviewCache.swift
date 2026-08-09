@@ -17,10 +17,17 @@ final class LabelPreviewCache {
         images.totalCostLimit = 64 * 1_024 * 1_024
     }
 
+    func removeAll() {
+        images.removeAllObjects()
+    }
+
     func imagePreview(for layer: LabelLayer, scale: Double) -> NSImage? {
-        guard let data = layer.imageData else { return nil }
-        let width = max(1, Int((layer.width * scale).rounded()))
-        let height = max(1, Int((layer.height * scale).rounded()))
+        guard let data = layer.imageData,
+              layer.width.isFinite,
+              layer.height.isFinite,
+              scale.isFinite else { return nil }
+        let width = Int(min(4_096, max(1, (layer.width * scale).rounded())))
+        let height = Int(min(4_096, max(1, (layer.height * scale).rounded())))
         let key = NSString(
             string: [
                 "image",
